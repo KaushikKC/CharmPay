@@ -1,14 +1,13 @@
+/* eslint-disable react-hooks/purity */
 "use client";
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Card from "@/components/ui/Card";
-import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import BackgroundPattern from "@/components/ui/BackgroundPattern";
-import PaymentHistory from "@/components/subscription/PaymentHistory";
 import { mockSubscriptions } from "@/lib/mockSubscriptions";
-import { Subscription } from "@/lib/mockSubscriptions";
+import { Subscription, Payment } from "@/lib/mockSubscriptions";
 
 export default function SubscriptionDetailPage() {
   const params = useParams();
@@ -25,16 +24,14 @@ export default function SubscriptionDetailPage() {
 
   const handleExecutePayment = async () => {
     setIsExecuting(true);
-    // Simulate payment execution
     await new Promise((resolve) => setTimeout(resolve, 2000));
     
     if (subscription) {
-      // Update subscription (in real app, this would be an API call)
-      const newPayment = {
+      const newPayment: Payment = {
         id: `pay_${Date.now()}`,
         amount: subscription.amountPerInterval,
         timestamp: new Date().toISOString(),
-        status: "completed" as const,
+        status: "completed",
       };
       
       setSubscription({
@@ -52,7 +49,6 @@ export default function SubscriptionDetailPage() {
 
   const handleCancel = async () => {
     setIsCancelling(true);
-    // Simulate cancellation
     await new Promise((resolve) => setTimeout(resolve, 1500));
     
     if (subscription) {
@@ -74,112 +70,164 @@ export default function SubscriptionDetailPage() {
     );
   }
 
+  const progressPercentage = ((subscription.totalLocked - subscription.remainingBalance) / subscription.totalLocked) * 100;
+
+  // Generate mock transaction IDs for payment history
+  const getTransactionId = (paymentId: string) => {
+    const hash = paymentId.split('_')[1];
+    return `0x${hash}${Math.random().toString(16).substring(2, 8)}...${Math.random().toString(16).substring(2, 6)}`;
+  };
+
   return (
     <div className="min-h-screen bg-black relative">
       <BackgroundPattern />
-      <div className="relative z-10 max-w-4xl mx-auto px-6 py-12">
-        <div className="mb-8">
-          <button
-            onClick={() => router.back()}
-            className="text-white/60 hover:text-white mb-4 transition-colors"
-          >
-            ← Back
-          </button>
-          <div className="flex items-center gap-3">
-            <h1 className="text-4xl font-bold">Subscription {subscription.id}</h1>
-            <Badge
-              variant={
-                subscription.status === "active"
-                  ? "active"
-                  : subscription.status === "cancelled"
-                  ? "cancelled"
-                  : "completed"
-              }
-            >
-              {subscription.status}
-            </Badge>
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+        {/* Top Section */}
+        <div className="mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-bold mb-2">Subscription Details</h1>
+            <div className="flex items-center gap-3">
+              <Badge
+                variant={
+                  subscription.status === "active"
+                    ? "active"
+                    : subscription.status === "cancelled"
+                    ? "cancelled"
+                    : "completed"
+                }
+              >
+                {subscription.status}
+              </Badge>
+              <p className="text-white/60 text-sm">{subscription.id}</p>
+            </div>
           </div>
+          
+          {subscription.status === "active" && (
+            <div className="flex gap-3">
+              <button
+                onClick={handleExecutePayment}
+                disabled={isExecuting}
+                className="px-4 py-2 text-sm font-medium border border-white/20 rounded-lg hover:border-white/40 hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                {isExecuting ? "Executing..." : "Execute Payment Now"}
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={isCancelling}
+                className="px-4 py-2 text-sm font-medium border border-red-500/50 rounded-lg hover:border-red-500/70 hover:bg-red-500/5 transition-colors disabled:opacity-50"
+              >
+                {isCancelling ? "Cancelling..." : "Cancel Subscription"}
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6 mb-6">
-          <Card>
-            <h3 className="text-lg font-semibold mb-4">Details</h3>
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm text-white/60 font-light">Recipient</p>
-                <p className="font-mono text-sm mt-1 break-all">
-                  {subscription.recipient}
-                </p>
+        {/* Main Content Grid */}
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Left Panel - Subscription Information */}
+          <div className="lg:col-span-2 space-y-6">
+            <Card>
+              <div className="space-y-4">
+                <div>
+                  <p className="text-xs text-white/60 font-light uppercase tracking-wider mb-1">
+                    RECIPIENT ADDRESS
+                  </p>
+                  <p className="font-mono text-sm font-semibold">
+                    {subscription.recipient}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/60 font-light uppercase tracking-wider mb-1">
+                    PAYMENT INTERVAL
+                  </p>
+                  <p className="font-semibold">{subscription.interval}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/60 font-light uppercase tracking-wider mb-1">
+                    AMOUNT PER CYCLE
+                  </p>
+                  <p className="font-semibold">{subscription.amountPerInterval} BTC</p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/60 font-light uppercase tracking-wider mb-1">
+                    NEXT EXECUTION AT
+                  </p>
+                  <p className="font-semibold">{subscription.nextPaymentAt}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm text-white/60 font-light">Amount per Interval</p>
-                <p className="font-semibold mt-1">
-                  {subscription.amountPerInterval} BTC
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-white/60 font-light">Interval</p>
-                <p className="font-semibold mt-1">{subscription.interval}</p>
-              </div>
-              <div>
-                <p className="text-sm text-white/60 font-light">Total Locked</p>
-                <p className="font-semibold mt-1">
-                  {subscription.totalLocked} BTC
-                </p>
-              </div>
-            </div>
-          </Card>
+            </Card>
 
-          <Card>
-            <h3 className="text-lg font-semibold mb-4">Status</h3>
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm text-white/60 font-light">Remaining Balance</p>
-                <p className="text-2xl font-semibold mt-1">
+            {/* Payment History */}
+            <Card>
+              <h3 className="text-lg font-semibold mb-4">Payment History</h3>
+              <div className="space-y-3">
+                {subscription.paymentHistory.map((payment, index) => (
+                  <div
+                    key={payment.id}
+                    className={`relative overflow-hidden rounded-lg border ${
+                      index % 2 === 0
+                        ? "bg-cyan-500/5 border-cyan-500/10"
+                        : "bg-magenta-500/5 border-magenta-500/10"
+                    }`}
+                  >
+                   
+                    <div className="pl-4 pr-4 py-3 flex items-center justify-between">
+                      <div className="flex-1">
+                        <p className="font-semibold text-cyan-400/90">{payment.amount} BTC</p>
+                        <p className="text-xs text-white/50 font-mono mt-1">
+                          {getTransactionId(payment.id)}
+                        </p>
+                      </div>
+                      <p className="text-xs text-white/50">
+                        {new Date(payment.timestamp).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+
+          {/* Right Panel - Protocol Lock */}
+          <div className="lg:col-span-1">
+            <Card>
+              <h3 className="text-lg font-semibold mb-2">Protocol Lock</h3>
+              <p className="text-sm text-white/60 mb-6">
+                These funds are currently locked in a Time-Lock Script on the Bitcoin blockchain.
+              </p>
+              
+              <div className="mb-6">
+                <p className="text-3xl font-bold mb-4">
                   {subscription.remainingBalance.toFixed(4)} BTC
                 </p>
-                {subscription.status === "cancelled" && (
-                  <p className="text-sm text-white/60 mt-1">
-                    Refundable
-                  </p>
-                )}
-              </div>
-              <div>
-                <p className="text-sm text-white/60 font-light">Next Payment</p>
-                <p className="font-semibold mt-1">
-                  {new Date(subscription.nextPaymentAt).toLocaleDateString()}
+                
+                {/* Progress Bar */}
+                <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+                  <div
+                    className="h-full bg-white rounded-full transition-all duration-300"
+                    style={{ width: `${progressPercentage}%` }}
+                  />
+                </div>
+                
+                <p className="text-xs text-white/60">
+                  Initial Deposit: {subscription.totalLocked} BTC
                 </p>
               </div>
-              <div>
-                <p className="text-sm text-white/60 font-light">Created</p>
-                <p className="font-semibold mt-1">
-                  {new Date(subscription.createdAt).toLocaleDateString()}
-                </p>
-              </div>
-            </div>
-          </Card>
-        </div>
 
-        {subscription.status === "active" && (
-          <div className="mb-6 flex gap-4">
-            <Button
-              variant="primary"
-              onClick={handleExecutePayment}
-              disabled={isExecuting}
-            >
-              {isExecuting ? "Executing..." : "Trigger Payment"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleCancel}
-              disabled={isCancelling}
-            >
-              {isCancelling ? "Cancelling..." : "Cancel Subscription"}
-            </Button>
+              {/* Execution Stats */}
+              <div className="space-y-3 pt-4 border-t border-white/10">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-white/60">Success Rate</p>
+                  <p className="font-semibold">100%</p>
+                </div>
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-white/60">Uptime</p>
+                  <p className="font-semibold">99.9%</p>
+                </div>
+              </div>
+            </Card>
           </div>
-        )}
-
-        <PaymentHistory payments={subscription.paymentHistory} />
+        </div>
       </div>
     </div>
   );
