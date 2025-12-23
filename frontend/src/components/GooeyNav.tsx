@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/purity */
+"use client";
 import React, { useRef, useEffect, useState } from 'react';
 
 interface GooeyNavItem {

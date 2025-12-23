@@ -6,6 +6,7 @@ import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
+import BackgroundPattern from "@/components/ui/BackgroundPattern";
 
 export default function CreatePage() {
   const router = useRouter();
@@ -39,8 +40,9 @@ export default function CreatePage() {
   };
 
   return (
-    <div className="min-h-screen">
-      <div className="max-w-2xl mx-auto px-6 py-12">
+    <div className="min-h-screen bg-black relative">
+      <BackgroundPattern />
+      <div className="relative z-10 max-w-2xl mx-auto px-6 py-12">
         <div className="mb-8">
           <h1 className="text-4xl font-bold mb-2">Create Subscription</h1>
           <p className="text-white/60 font-light">

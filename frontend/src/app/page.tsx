@@ -8,9 +8,7 @@ import BlurText from "@/components/ui/BlurText";
 export default function Home() {
   return (
     <div className="min-h-screen bg-black relative">
-      <div
-        className="fixed inset-0 z-0 pointer-events-none"
-      >
+      <div className="fixed inset-0 z-0 pointer-events-none">
         <PrismaticBurst
           animationType="rotate3d"
           intensity={2}
@@ -32,10 +30,7 @@ export default function Home() {
       </div>
 
       {/* Hero Section */}
-      <section
-        className="relative w-full bg-transparent"
-        style={{ minHeight: "700px" }}
-      >
+      <section className="relative w-full bg-transparent" style={{ minHeight: "700px" }}>
         <div className="relative z-10 max-w-7xl mx-auto px-6 py-20 md:py-32">
           <div className="text-center space-y-6">
             <div className="flex flex-col items-center">
@@ -73,8 +68,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-    
     </div>
   );
 }

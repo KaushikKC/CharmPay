@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
+import BackgroundPattern from "@/components/ui/BackgroundPattern";
 import { mockWallet } from "@/lib/mockWallet";
 
 export default function ConnectPage() {
@@ -28,8 +29,9 @@ export default function ConnectPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="max-w-md w-full px-6">
+    <div className="min-h-screen flex items-center justify-center bg-black relative">
+      <BackgroundPattern />
+      <div className="relative z-10 max-w-md w-full px-6">
         <Card>
           <div className="text-center space-y-6">
             <h1 className="text-3xl font-semibold">Connect Wallet</h1>

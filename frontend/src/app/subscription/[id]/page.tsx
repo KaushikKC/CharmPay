@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
+import BackgroundPattern from "@/components/ui/BackgroundPattern";
 import PaymentHistory from "@/components/subscription/PaymentHistory";
 import { mockSubscriptions } from "@/lib/mockSubscriptions";
 import { Subscription } from "@/lib/mockSubscriptions";
@@ -66,15 +67,17 @@ export default function SubscriptionDetailPage() {
 
   if (!subscription) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-white/60">Subscription not found</p>
+      <div className="min-h-screen flex items-center justify-center bg-black relative">
+        <BackgroundPattern />
+        <p className="relative z-10 text-white/60">Subscription not found</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen">
-      <div className="max-w-4xl mx-auto px-6 py-12">
+    <div className="min-h-screen bg-black relative">
+      <BackgroundPattern />
+      <div className="relative z-10 max-w-4xl mx-auto px-6 py-12">
         <div className="mb-8">
           <button
             onClick={() => router.back()}
