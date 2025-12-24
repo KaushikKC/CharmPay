@@ -2,16 +2,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import BackgroundPattern from "@/components/ui/BackgroundPattern";
 import { mockSubscriptions } from "@/lib/mockSubscriptions";
 import { Subscription, Payment } from "@/lib/mockSubscriptions";
+import { getTransactionExplorerUrl } from "@/lib/explorer";
 
 export default function SubscriptionDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const [isExecuting, setIsExecuting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
@@ -73,9 +73,15 @@ export default function SubscriptionDetailPage() {
   const progressPercentage = ((subscription.totalLocked - subscription.remainingBalance) / subscription.totalLocked) * 100;
 
   // Generate mock transaction IDs for payment history
-  const getTransactionId = (paymentId: string) => {
+  // In production, these would come from actual transaction hashes
+  const getTransactionId = (paymentId: string): string => {
     const hash = paymentId.split('_')[1];
-    return `0x${hash}${Math.random().toString(16).substring(2, 8)}...${Math.random().toString(16).substring(2, 6)}`;
+    // Generate a mock transaction hash (64 hex characters for Bitcoin tx hash)
+    const randomPart1 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
+    const randomPart2 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
+    const randomPart3 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
+    const randomPart4 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
+    return `${hash}${randomPart1}${randomPart2}${randomPart3}${randomPart4}`.slice(0, 64);
   };
 
   return (
@@ -174,9 +180,14 @@ export default function SubscriptionDetailPage() {
                     <div className="pl-4 pr-4 py-3 flex items-center justify-between">
                       <div className="flex-1">
                         <p className="font-semibold text-cyan-400/90">{payment.amount} BTC</p>
-                        <p className="text-xs text-white/50 font-mono mt-1">
-                          {getTransactionId(payment.id)}
-                        </p>
+                        <a
+                          href={getTransactionExplorerUrl(getTransactionId(payment.id))}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-cyan-400/70 font-mono mt-1 hover:text-cyan-400 hover:underline block"
+                        >
+                          {getTransactionId(payment.id).slice(0, 16)}...{getTransactionId(payment.id).slice(-8)}
+                        </a>
                       </div>
                       <p className="text-xs text-white/50">
                         {new Date(payment.timestamp).toLocaleDateString()}
