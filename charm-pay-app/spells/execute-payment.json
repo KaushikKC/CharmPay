@@ -1,0 +1,48 @@
+{
+  "version": 8,
+  "apps": {
+    "$00": "n/${app_id}/${app_vk}",
+    "$01": "t/${app_id}/${app_vk}"
+  },
+  "ins": [
+    {
+      "utxo_id": "${subscription_utxo}",
+      "charms": {
+        "$00": {
+          "ticker": "SUBSCRIPTION-${subscription_id}",
+          "remaining": ${current_remaining_balance}
+        }
+      }
+    },
+    {
+      "utxo_id": "${token_utxo}",
+      "charms": {
+        "$01": ${current_remaining_balance}
+      }
+    }
+  ],
+  "outs": [
+    {
+      "address": "${subscriber_addr}",
+      "charms": {
+        "$00": {
+          "ticker": "SUBSCRIPTION-${subscription_id}",
+          "remaining": ${new_remaining_balance}
+        }
+      }
+    },
+    {
+      "address": "${recipient_addr}",
+      "charms": {
+        "$01": ${payment_amount}
+      }
+    },
+    {
+      "address": "${subscriber_addr}",
+      "charms": {
+        "$01": ${new_remaining_balance}
+      }
+    }
+  ]
+}
+

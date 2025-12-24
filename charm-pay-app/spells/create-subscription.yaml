@@ -1,0 +1,29 @@
+version: 8
+
+# This spell creates a new subscription
+# It mints an NFT representing the subscription and locks tokens for future payments
+
+apps:
+  $00: n/${app_id}/${app_vk}  # NFT app for subscription state
+  $01: t/${app_id}/${app_vk}  # Token app for locked funds
+
+private_inputs:
+  $00: "${in_utxo_0}"  # UTXO being spent to create subscription
+
+ins:
+  # Input: UTXO from subscriber with funds to lock
+  - utxo_id: ${in_utxo_0}
+    charms: {}
+
+outs:
+  # Output 1: Subscription NFT to subscriber (tracks subscription state)
+  - address: ${subscriber_addr}
+    charms:
+      $00:
+        ticker: SUBSCRIPTION-${subscription_id}
+        remaining: ${total_locked_amount}  # Total amount locked for subscription
+  # Output 2: Locked tokens in subscription (managed by subscriber)
+  - address: ${subscriber_addr}
+    charms:
+      $01: ${total_locked_amount}  # Total tokens locked for subscription payments
+

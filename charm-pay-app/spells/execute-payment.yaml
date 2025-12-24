@@ -1,0 +1,38 @@
+version: 8
+
+# This spell executes a subscription payment
+# It transfers payment amount to recipient and updates subscription state
+# Contract validation: output_tokens - input_tokens == incoming_remaining - outgoing_remaining
+
+apps:
+  $00: n/${app_id}/${app_vk}  # NFT app for subscription state
+  $01: t/${app_id}/${app_vk}  # Token app for payments
+
+ins:
+  # Input 1: Subscription NFT (current state)
+  - utxo_id: ${subscription_utxo}
+    charms:
+      $00:
+        ticker: SUBSCRIPTION-${subscription_id}
+        remaining: ${current_remaining_balance}  # Current remaining balance
+  # Input 2: All locked tokens (must include payment + remaining)
+  - utxo_id: ${token_utxo}
+    charms:
+      $01: ${current_remaining_balance}  # All locked tokens (payment_amount + new_remaining_balance)
+
+outs:
+  # Output 1: Updated subscription NFT (with reduced remaining balance)
+  - address: ${subscriber_addr}
+    charms:
+      $00:
+        ticker: SUBSCRIPTION-${subscription_id}
+        remaining: ${new_remaining_balance}  # Remaining balance after payment
+  # Output 2: Payment to recipient
+  - address: ${recipient_addr}
+    charms:
+      $01: ${payment_amount}  # Payment amount sent to recipient
+  # Output 3: Remaining locked tokens back to subscriber
+  - address: ${subscriber_addr}
+    charms:
+      $01: ${new_remaining_balance}  # Remaining tokens after payment
+

@@ -1,0 +1,34 @@
+{
+  "version": 8,
+  "apps": {
+    "$00": "n/83d69893df32d6c42073b5c731f0326fc970faf997b469b5d6d285e294ea0876/83d69893df32d6c42073b5c731f0326fc970faf997b469b5d6d285e294ea0876",
+    "$01": "t/83d69893df32d6c42073b5c731f0326fc970faf997b469b5d6d285e294ea0876/83d69893df32d6c42073b5c731f0326fc970faf997b469b5d6d285e294ea0876"
+  },
+  "private_inputs": {
+    "$00": "d8fa4cdade7ac3dff64047dc73b58591ebe638579881b200d4fea68fc84521f0:0"
+  },
+  "ins": [
+    {
+      "utxo_id": "d8fa4cdade7ac3dff64047dc73b58591ebe638579881b200d4fea68fc84521f0:0",
+      "charms": {}
+    }
+  ],
+  "outs": [
+    {
+      "address": "tb1p3w06fgh64axkj3uphn4t258ehweccm367vkdhkvz8qzdagjctm8qaw2xyv",
+      "charms": {
+        "$00": {
+          "ticker": "SUBSCRIPTION-sub_001",
+          "remaining": 1000000
+        }
+      }
+    },
+    {
+      "address": "tb1p3w06fgh64axkj3uphn4t258ehweccm367vkdhkvz8qzdagjctm8qaw2xyv",
+      "charms": {
+        "$01": 1000000
+      }
+    }
+  ]
+}
+

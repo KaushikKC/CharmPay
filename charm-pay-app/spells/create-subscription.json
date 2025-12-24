@@ -1,0 +1,34 @@
+{
+  "version": 8,
+  "apps": {
+    "$00": "n/${app_id}/${app_vk}",
+    "$01": "t/${app_id}/${app_vk}"
+  },
+  "private_inputs": {
+    "$00": "${in_utxo_0}"
+  },
+  "ins": [
+    {
+      "utxo_id": "${in_utxo_0}",
+      "charms": {}
+    }
+  ],
+  "outs": [
+    {
+      "address": "${subscriber_addr}",
+      "charms": {
+        "$00": {
+          "ticker": "SUBSCRIPTION-${subscription_id}",
+          "remaining": ${total_locked_amount}
+        }
+      }
+    },
+    {
+      "address": "${subscriber_addr}",
+      "charms": {
+        "$01": ${total_locked_amount}
+      }
+    }
+  ]
+}
+
