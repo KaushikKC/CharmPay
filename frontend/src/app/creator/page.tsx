@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import SpotlightCard from "@/components/ui/SpotLightCard";
@@ -7,6 +9,27 @@ import BackgroundPattern from "@/components/ui/BackgroundPattern";
 import { mockCreatorSubscriptions } from "@/lib/mockSubscriptions";
 
 export default function CreatorPage() {
+  const router = useRouter();
+  
+  const wallet = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const storedWallet = localStorage.getItem("wallet");
+    return storedWallet ? JSON.parse(storedWallet) : null;
+  }, []);
+
+  useEffect(() => {
+    if (!wallet) {
+      router.push("/");
+    }
+  }, [wallet, router]);
+
+  if (!wallet) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-black">
+        <p className="text-white/60">Loading...</p>
+      </div>
+    );
+  }
   const totalMonthlyIncome = mockCreatorSubscriptions.reduce(
     (sum, sub) => sum + sub.totalReceived,
     0
@@ -30,7 +53,7 @@ export default function CreatorPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-8 sm:mb-12">
           <SpotlightCard 
             className="border-white/10 bg-black p-6"
-            spotlightColor="rgba(0, 245, 255, 0.2)"
+            spotlightColor="rgba(0, 245, 255, 0.5)"
           >
             <div className="space-y-2">
               <p className="text-sm text-white/60 font-light">
@@ -44,7 +67,7 @@ export default function CreatorPage() {
 
           <SpotlightCard 
             className="border-white/10 bg-black p-6"
-            spotlightColor="rgba(255, 0, 255, 0.2)"
+            spotlightColor="rgba(255, 0, 255, 0.5)"
           >
             <div className="space-y-2">
               <p className="text-sm text-white/60 font-light">
@@ -58,7 +81,7 @@ export default function CreatorPage() {
 
           <SpotlightCard 
             className="border-white/10 bg-black p-6"
-            spotlightColor="rgba(255, 0, 128, 0.2)"
+            spotlightColor="rgba(255, 0, 128, 0.5)"
           >
             <div className="space-y-2">
               <p className="text-sm text-white/60 font-light">Total Payments</p>

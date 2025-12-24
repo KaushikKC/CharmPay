@@ -5,6 +5,7 @@ import React, { useRef, useEffect, useState } from 'react';
 interface GooeyNavItem {
   label: string;
   href: string;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 }
 
 export interface GooeyNavProps {
@@ -33,6 +34,27 @@ const GooeyNav: React.FC<GooeyNavProps> = ({
   const filterRef = useRef<HTMLSpanElement>(null);
   const textRef = useRef<HTMLSpanElement>(null);
   const [activeIndex, setActiveIndex] = useState<number>(initialActiveIndex);
+
+  // Sync activeIndex with initialActiveIndex prop changes
+  useEffect(() => {
+    if (initialActiveIndex !== activeIndex) {
+      setActiveIndex(initialActiveIndex);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialActiveIndex]);
+  
+  // Reset effect visibility when activeIndex changes
+  useEffect(() => {
+    if (filterRef.current && textRef.current) {
+      if (activeIndex >= 0) {
+        filterRef.current.style.opacity = '1';
+        textRef.current.style.opacity = '1';
+      } else {
+        filterRef.current.style.opacity = '0';
+        textRef.current.style.opacity = '0';
+      }
+    }
+  }, [activeIndex]);
 
   const noise = (n = 1) => n / 2 - Math.random() * n;
   const getXY = (distance: number, pointIndex: number, totalPoints: number): [number, number] => {
@@ -100,22 +122,14 @@ const GooeyNav: React.FC<GooeyNavProps> = ({
     textRef.current.innerText = element.innerText;
   };
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>, index: number) => {
-    const liEl = e.currentTarget;
-    if (activeIndex === index) return;
-    setActiveIndex(index);
-    updateEffectPosition(liEl);
-    if (filterRef.current) {
-      const particles = filterRef.current.querySelectorAll('.particle');
-      particles.forEach(p => filterRef.current!.removeChild(p));
+    // Call the item's onClick handler if provided (for navigation)
+    // This will trigger navigation, and the pathname change will update activeIndex
+    if (items[index]?.onClick) {
+      items[index].onClick!(e);
     }
-    if (textRef.current) {
-      textRef.current.classList.remove('active');
-      void textRef.current.offsetWidth;
-      textRef.current.classList.add('active');
-    }
-    if (filterRef.current) {
-      makeParticles(filterRef.current);
-    }
+    
+    // Don't manually set activeIndex here - let it be controlled by pathname via initialActiveIndex
+    // This prevents conflicts and ensures only one item is active based on the current route
   };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>, index: number) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -133,15 +147,38 @@ const GooeyNav: React.FC<GooeyNavProps> = ({
   };
   useEffect(() => {
     if (!navRef.current || !containerRef.current) return;
-    const activeLi = navRef.current.querySelectorAll('li')[activeIndex] as HTMLElement;
-    if (activeLi) {
-      updateEffectPosition(activeLi);
-      textRef.current?.classList.add('active');
+    
+    // Clear all active states first
+    const allLis = navRef.current.querySelectorAll('li');
+    allLis.forEach(li => {
+      li.classList.remove('active');
+    });
+    
+    // If activeIndex is valid, set active state for that item
+    if (activeIndex >= 0 && activeIndex < allLis.length) {
+      const activeLi = allLis[activeIndex] as HTMLElement;
+      if (activeLi) {
+        activeLi.classList.add('active');
+        updateEffectPosition(activeLi);
+        textRef.current?.classList.add('active');
+      }
+    } else {
+      // No active item - hide effects
+      if (filterRef.current) {
+        filterRef.current.style.opacity = '0';
+      }
+      if (textRef.current) {
+        textRef.current.classList.remove('active');
+        textRef.current.style.opacity = '0';
+      }
     }
+    
     const resizeObserver = new ResizeObserver(() => {
-      const currentActiveLi = navRef.current?.querySelectorAll('li')[activeIndex] as HTMLElement;
-      if (currentActiveLi) {
-        updateEffectPosition(currentActiveLi);
+      if (activeIndex >= 0 && activeIndex < allLis.length) {
+        const currentActiveLi = allLis[activeIndex] as HTMLElement;
+        if (currentActiveLi) {
+          updateEffectPosition(currentActiveLi);
+        }
       }
     });
     resizeObserver.observe(containerRef.current);

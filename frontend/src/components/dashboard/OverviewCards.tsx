@@ -26,7 +26,7 @@ export default function OverviewCards() {
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
       <SpotlightCard 
         className="border-white/10 bg-black p-6"
-        spotlightColor="rgba(0, 245, 255, 0.2)"
+        spotlightColor="rgba(0, 245, 255, 0.5)"
       >
         <div className="space-y-2">
           <p className="text-sm text-white/60 font-light">Active Subscriptions</p>
@@ -36,7 +36,7 @@ export default function OverviewCards() {
       
       <SpotlightCard 
         className="border-white/10 bg-black p-6"
-        spotlightColor="rgba(255, 0, 255, 0.2)"
+        spotlightColor="rgba(255, 0, 255, 0.5)"
       >
         <div className="space-y-2">
           <p className="text-sm text-white/60 font-light">Total BTC Locked</p>
@@ -46,7 +46,7 @@ export default function OverviewCards() {
       
       <SpotlightCard 
         className="border-white/10 bg-black p-6"
-        spotlightColor="rgba(255, 0, 128, 0.2)"
+        spotlightColor="rgba(255, 0, 128, 0.5)"
       >
         <div className="space-y-2">
           <p className="text-sm text-white/60 font-light">Remaining Balance</p>
@@ -56,7 +56,7 @@ export default function OverviewCards() {
       
       <SpotlightCard 
         className="border-white/10 bg-black p-6"
-        spotlightColor="rgba(139, 0, 255, 0.2)"
+        spotlightColor="rgba(139, 0, 255, 0.5)"
       >
         <div className="space-y-2">
           <p className="text-sm text-white/60 font-light">Next Payment</p>

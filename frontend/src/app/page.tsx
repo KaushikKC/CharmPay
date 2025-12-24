@@ -1,11 +1,31 @@
 "use client";
 
-import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 import PrismaticBurst from "@/components/ui/PrismaticBurst";
 import BlurText from "@/components/ui/BlurText";
+import { getStoredWallet } from "@/lib/xverseWallet";
 
 export default function Home() {
+  const router = useRouter();
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
+
+  const handleLaunchApp = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    
+    // Check if wallet is connected
+    const wallet = getStoredWallet();
+    if (!wallet || !wallet.paymentAddress) {
+      setAlertMessage("Please connect your wallet first to access the dashboard.");
+      setTimeout(() => setAlertMessage(null), 5000);
+      return;
+    }
+    
+    // Wallet is connected, navigate to dashboard
+    router.push("/dashboard");
+  };
+
   return (
     <div className="min-h-screen bg-black relative">
       <div className="fixed inset-0 z-0 pointer-events-none">
@@ -55,15 +75,20 @@ export default function Home() {
               once, execute payments automatically.
             </p>
 
+            {alertMessage && (
+              <div className="max-w-2xl mx-auto px-4 py-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                <p className="text-sm text-yellow-400 text-center">{alertMessage}</p>
+              </div>
+            )}
+
             <div className="pt-6">
-              <Link href="/connect">
-                <Button
-                  variant="primary"
-                  className="text-lg px-8 py-4 relative z-10"
-                >
-                  Launch Application
-                </Button>
-              </Link>
+              <Button
+                variant="primary"
+                onClick={handleLaunchApp}
+                className="text-lg px-8 py-4 relative z-10"
+              >
+                Launch Application
+              </Button>
             </div>
           </div>
         </div>

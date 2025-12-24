@@ -17,7 +17,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!wallet) {
-      router.push("/connect");
+      router.push("/");
     }
   }, [wallet, router]);
 

@@ -11,6 +11,7 @@ import {
   isXverseInstalled,
   getStoredWallet,
   clearStoredWallet,
+  storeWallet,
   updateStoredWalletBalance,
   type XverseWallet,
 } from "@/lib/xverseWallet";
@@ -26,6 +27,7 @@ export default function Header() {
   const [wallet, setWallet] = useState<XverseWallet | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isWalletDetected, setIsWalletDetected] = useState(false);
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
 
   useEffect(() => {
     // Check if wallet is already connected
@@ -47,33 +49,53 @@ export default function Header() {
   }, []);
 
   const activeIndex = useMemo(() => {
+    // Only show active state for Dashboard or Creator pages, not for home page
+    if (pathname === "/") {
+      return -1; // No active item on home page
+    }
     const index = NAV_ITEMS.findIndex(item => item.href === pathname);
     return index !== -1 ? index : -1;
   }, [pathname]);
+
+  const handleNavClick = (href: string, e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    
+    // Check if wallet is connected before allowing navigation
+    if (!wallet || !wallet.paymentAddress) {
+      setAlertMessage("Please connect your wallet first to access this page.");
+      setTimeout(() => setAlertMessage(null), 5000);
+      return;
+    }
+    
+    // Wallet is connected, allow navigation
+    router.push(href);
+  };
 
   const navItems = NAV_ITEMS.map((item) => ({
     label: item.label,
     href: item.href,
     isPrimary: false,
-    onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
-      e.preventDefault();
-      router.push(item.href);
-    },
+    onClick: (e: React.MouseEvent<HTMLAnchorElement>) => handleNavClick(item.href, e),
   }));
 
   const handleConnect = async () => {
     setIsConnecting(true);
+    setAlertMessage(null);
     try {
       const result = await connectXverseWallet();
       if (result.success && result.wallet) {
         setWallet(result.wallet);
+        storeWallet(result.wallet); // Store wallet in localStorage
         // Redirect to dashboard after connection
         router.push("/dashboard");
       } else {
-        alert(result.error || "Failed to connect wallet");
+        setAlertMessage(result.error || "Failed to connect wallet");
+        setTimeout(() => setAlertMessage(null), 5000);
       }
-    } catch {
-      alert("An error occurred while connecting");
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "An error occurred while connecting";
+      setAlertMessage(errorMsg);
+      setTimeout(() => setAlertMessage(null), 5000);
     } finally {
       setIsConnecting(false);
     }
@@ -89,7 +111,14 @@ export default function Header() {
 
   return (
     <header className="sticky top-0 z-50 w-full px-6 py-4">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-7xl mx-auto space-y-2">
+        {/* Alert Message */}
+        {alertMessage && (
+          <div className="px-4 py-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+            <p className="text-sm text-yellow-400 text-center">{alertMessage}</p>
+          </div>
+        )}
+        
         <div className="backdrop-blur-xl bg-white/5 border border-white/20 rounded-2xl shadow-lg">
           <div className="px-6 py-3">
             <div className="flex items-center justify-between">
@@ -102,7 +131,7 @@ export default function Header() {
                   particleCount={15}
                   particleDistances={[90, 10]}
                   particleR={100}
-                  initialActiveIndex={activeIndex}
+                  initialActiveIndex={activeIndex >= 0 ? activeIndex : -1}
                   animationTime={600}
                   timeVariance={300}
                   colors={[1, 2, 3, 1, 2, 3, 1, 4]}

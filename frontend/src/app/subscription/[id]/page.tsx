@@ -120,7 +120,7 @@ export default function SubscriptionDetailPage() {
               <button
                 onClick={handleCancel}
                 disabled={isCancelling}
-                className="px-4 py-2 text-sm font-medium border border-red-500/50 rounded-lg hover:border-red-500/70 hover:bg-red-500/5 transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium border border-red-500/50 rounded-lg hover:border-red-500/70 transition-colors disabled:opacity-50 bg-red-500/15 hover:bg-red-500/30"
               >
                 {isCancelling ? "Cancelling..." : "Cancel Subscription"}
               </button>
