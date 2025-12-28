@@ -1,0 +1,14 @@
+version: 8
+apps:
+  $00: n/test_app_id/test_app_vk
+  $01: t/test_app_id/test_app_vk
+ins:
+  - utxo_id: "test_txid:0"
+    charms: {}
+outs:
+  - address: "tb1qtest"
+    charms:
+      $00:
+        ticker: "SUBSCRIPTION-sub_001"
+        remaining: 1000000
+      $01: 1000000

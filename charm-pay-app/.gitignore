@@ -2,3 +2,9 @@
 /elf
 
 .env*
+
+.app_vk
+*.md
+
+.app_bin_path
+

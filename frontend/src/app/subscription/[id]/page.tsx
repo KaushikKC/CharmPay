@@ -1,88 +1,265 @@
-/* eslint-disable react-hooks/purity */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import BackgroundPattern from "@/components/ui/BackgroundPattern";
-import { mockSubscriptions } from "@/lib/mockSubscriptions";
-import { Subscription, Payment } from "@/lib/mockSubscriptions";
 import { getTransactionExplorerUrl } from "@/lib/explorer";
+import { executePayment, cancelSubscription, getSubscriptionState } from "@/lib/subscriptionFlow";
+import { loadWasmBinary } from "@/lib/wasmLoader";
+import { getStoredWallet } from "@/lib/xverseWallet";
+import Button from "@/components/ui/Button";
+
+interface Subscription {
+  id: string;
+  recipient: string;
+  amountPerInterval: number;
+  interval: string;
+  totalLocked: number;
+  remainingBalance: number;
+  nextPaymentAt: string;
+  status: "active" | "cancelled" | "completed";
+  paymentHistory: Array<{
+    id: string;
+    amount: number;
+    timestamp: string;
+    status: string;
+    txid?: string;
+  }>;
+  createdAt: string;
+  subscriptionUtxo?: string;
+  tokenUtxo?: string;
+}
 
 export default function SubscriptionDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const [isExecuting, setIsExecuting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Find subscription by ID
+  // Load subscription from localStorage and blockchain
   useEffect(() => {
-    const sub = mockSubscriptions.find((s) => s.id === params.id);
-    setSubscription(sub || null);
+    loadSubscription();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
+  const loadSubscription = async () => {
+    try {
+      // Load from localStorage
+      const stored = localStorage.getItem('subscriptions');
+      const subscriptions: Subscription[] = stored ? JSON.parse(stored) : [];
+      const sub = subscriptions.find((s) => s.id === params.id);
+
+      if (!sub) {
+        setLoading(false);
+        return;
+      }
+
+      // Try to fetch real state from blockchain
+      const wallet = getStoredWallet();
+      if (wallet && sub.subscriptionUtxo) {
+        try {
+          const walletOutpoints = new Set<string>();
+          const state = await getSubscriptionState(
+            sub.subscriptionUtxo,
+            walletOutpoints
+          );
+          
+          if (state) {
+            sub.remainingBalance = (state.metadata?.remaining || 0) / 100000000;
+            sub.status = state.metadata?.remaining === 0 ? 'completed' : 'active';
+          }
+        } catch (error) {
+          console.error('Failed to fetch subscription state:', error);
+        }
+      }
+
+      setSubscription(sub);
+    } catch (error) {
+      console.error('Error loading subscription:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleExecutePayment = async () => {
+    if (!subscription) return;
+
     setIsExecuting(true);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    
-    if (subscription) {
-      const newPayment: Payment = {
+    setError(null);
+
+    try {
+      const wallet = getStoredWallet();
+      if (!wallet) {
+        throw new Error('Wallet not connected');
+      }
+
+      if (!subscription.subscriptionUtxo || !subscription.tokenUtxo) {
+        throw new Error('Subscription UTXOs not found');
+      }
+
+      // Load WASM binary
+      const wasmBinary = await loadWasmBinary();
+
+      // Get app ID and VK
+      const appId = process.env.NEXT_PUBLIC_CHARMS_APP_ID || '';
+      const appVk = process.env.NEXT_PUBLIC_CHARMS_APP_VK || '';
+
+      if (!appId || !appVk) {
+        throw new Error('App ID and Verification Key must be set');
+      }
+
+      // Convert amounts to satoshis
+      const paymentAmountSats = Math.floor(subscription.amountPerInterval * 100000000);
+      const currentRemainingSats = Math.floor(subscription.remainingBalance * 100000000);
+
+      if (currentRemainingSats < paymentAmountSats) {
+        throw new Error('Insufficient balance for payment');
+      }
+
+      // Execute payment
+      const result = await executePayment({
+        subscriptionUtxo: subscription.subscriptionUtxo,
+        tokenUtxo: subscription.tokenUtxo,
+        subscriptionId: subscription.id,
+        currentRemainingBalance: currentRemainingSats,
+        paymentAmount: paymentAmountSats,
+        recipientAddress: subscription.recipient,
+        appId,
+        wasmBinary,
+        walletAddress: wallet.paymentAddress,
+      });
+
+      // Update subscription state
+      const newRemainingBalance = (currentRemainingSats - paymentAmountSats) / 100000000;
+      const newPayment = {
         id: `pay_${Date.now()}`,
         amount: subscription.amountPerInterval,
         timestamp: new Date().toISOString(),
-        status: "completed",
+        status: 'completed',
+        txid: result.txids[1], // Spell transaction ID
       };
-      
-      setSubscription({
+
+      const updatedSubscription: Subscription = {
         ...subscription,
-        remainingBalance: subscription.remainingBalance - subscription.amountPerInterval,
+        remainingBalance: newRemainingBalance,
+        subscriptionUtxo: result.newSubscriptionUtxo,
+        tokenUtxo: result.newTokenUtxo,
         paymentHistory: [newPayment, ...subscription.paymentHistory],
-        nextPaymentAt: new Date(
-          new Date(subscription.nextPaymentAt).getTime() + 30 * 24 * 60 * 60 * 1000
-        ).toISOString().split("T")[0],
-      });
+        status: newRemainingBalance === 0 ? 'completed' : 'active',
+      };
+
+      // Update localStorage
+      const stored = localStorage.getItem('subscriptions');
+      const subscriptions: Subscription[] = stored ? JSON.parse(stored) : [];
+      const updated = subscriptions.map((s) => 
+        s.id === subscription.id ? updatedSubscription : s
+      );
+      localStorage.setItem('subscriptions', JSON.stringify(updated));
+
+      setSubscription(updatedSubscription);
+    } catch (err: any) {
+      console.error('Error executing payment:', err);
+      setError(err.message || 'Failed to execute payment');
+    } finally {
+      setIsExecuting(false);
     }
-    
-    setIsExecuting(false);
   };
 
   const handleCancel = async () => {
+    if (!subscription) return;
+
     setIsCancelling(true);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    
-    if (subscription) {
-      setSubscription({
-        ...subscription,
-        status: "cancelled",
+    setError(null);
+
+    try {
+      const wallet = getStoredWallet();
+      if (!wallet) {
+        throw new Error('Wallet not connected');
+      }
+
+      if (!subscription.subscriptionUtxo || !subscription.tokenUtxo) {
+        throw new Error('Subscription UTXOs not found');
+      }
+
+      // Load WASM binary
+      const wasmBinary = await loadWasmBinary();
+
+      // Get app ID and VK
+      const appId = process.env.NEXT_PUBLIC_CHARMS_APP_ID || '';
+      const appVk = process.env.NEXT_PUBLIC_CHARMS_APP_VK || '';
+
+      if (!appId || !appVk) {
+        throw new Error('App ID and Verification Key must be set');
+      }
+
+      // Convert to satoshis
+      const remainingBalanceSats = Math.floor(subscription.remainingBalance * 100000000);
+
+      // Cancel subscription
+      await cancelSubscription({
+        subscriptionUtxo: subscription.subscriptionUtxo,
+        tokenUtxo: subscription.tokenUtxo,
+        subscriptionId: subscription.id,
+        remainingBalance: remainingBalanceSats,
+        appId,
+        wasmBinary,
+        walletAddress: wallet.paymentAddress,
       });
+
+      // Update subscription state
+      const updatedSubscription: Subscription = {
+        ...subscription,
+        status: 'cancelled',
+        remainingBalance: 0,
+      };
+
+      // Update localStorage
+      const stored = localStorage.getItem('subscriptions');
+      const subscriptions: Subscription[] = stored ? JSON.parse(stored) : [];
+      const updated = subscriptions.map((s) => 
+        s.id === subscription.id ? updatedSubscription : s
+      );
+      localStorage.setItem('subscriptions', JSON.stringify(updated));
+
+      setSubscription(updatedSubscription);
+    } catch (err: any) {
+      console.error('Error cancelling subscription:', err);
+      setError(err.message || 'Failed to cancel subscription');
+    } finally {
+      setIsCancelling(false);
     }
-    
-    setIsCancelling(false);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-black relative">
+        <BackgroundPattern />
+        <p className="relative z-10 text-white/60">Loading...</p>
+      </div>
+    );
+  }
 
   if (!subscription) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black relative">
         <BackgroundPattern />
-        <p className="relative z-10 text-white/60">Subscription not found</p>
+        <div className="relative z-10 text-center">
+          <p className="text-white/60 mb-4">Subscription not found</p>
+          <Button onClick={() => router.push('/dashboard')} variant="primary">
+            Back to Dashboard
+          </Button>
+        </div>
       </div>
     );
   }
 
   const progressPercentage = ((subscription.totalLocked - subscription.remainingBalance) / subscription.totalLocked) * 100;
-
-  // Generate mock transaction IDs for payment history
-  // In production, these would come from actual transaction hashes
-  const getTransactionId = (paymentId: string): string => {
-    const hash = paymentId.split('_')[1];
-    // Generate a mock transaction hash (64 hex characters for Bitcoin tx hash)
-    const randomPart1 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
-    const randomPart2 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
-    const randomPart3 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
-    const randomPart4 = Math.random().toString(16).substring(2, 18).padStart(16, '0');
-    return `${hash}${randomPart1}${randomPart2}${randomPart3}${randomPart4}`.slice(0, 64);
-  };
 
   return (
     <div className="min-h-screen bg-black relative">
@@ -128,6 +305,12 @@ export default function SubscriptionDetailPage() {
           )}
         </div>
 
+        {error && (
+          <Card className="mb-6 border-red-500/50 bg-red-500/10">
+            <p className="text-red-400 text-sm">{error}</p>
+          </Card>
+        )}
+
         {/* Main Content Grid */}
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Left Panel - Subscription Information */}
@@ -167,34 +350,39 @@ export default function SubscriptionDetailPage() {
             <Card>
               <h3 className="text-lg font-semibold mb-4">Payment History</h3>
               <div className="space-y-3">
-                {subscription.paymentHistory.map((payment, index) => (
-                  <div
-                    key={payment.id}
-                    className={`relative overflow-hidden rounded-lg border ${
-                      index % 2 === 0
-                        ? "bg-cyan-500/5 border-cyan-500/10"
-                        : "bg-magenta-500/5 border-magenta-500/10"
-                    }`}
-                  >
-                   
-                    <div className="pl-4 pr-4 py-3 flex items-center justify-between">
-                      <div className="flex-1">
-                        <p className="font-semibold text-cyan-400/90">{payment.amount} BTC</p>
-                        <a
-                          href={getTransactionExplorerUrl(getTransactionId(payment.id))}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-cyan-400/70 font-mono mt-1 hover:text-cyan-400 hover:underline block"
-                        >
-                          {getTransactionId(payment.id).slice(0, 16)}...{getTransactionId(payment.id).slice(-8)}
-                        </a>
+                {subscription.paymentHistory.length === 0 ? (
+                  <p className="text-white/60 text-sm">No payments yet</p>
+                ) : (
+                  subscription.paymentHistory.map((payment, index) => (
+                    <div
+                      key={payment.id}
+                      className={`relative overflow-hidden rounded-lg border ${
+                        index % 2 === 0
+                          ? "bg-cyan-500/5 border-cyan-500/10"
+                          : "bg-magenta-500/5 border-magenta-500/10"
+                      }`}
+                    >
+                      <div className="pl-4 pr-4 py-3 flex items-center justify-between">
+                        <div className="flex-1">
+                          <p className="font-semibold text-cyan-400/90">{payment.amount} BTC</p>
+                          {payment.txid && (
+                            <a
+                              href={getTransactionExplorerUrl(payment.txid)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-cyan-400/70 font-mono mt-1 hover:text-cyan-400 hover:underline block"
+                            >
+                              {payment.txid.slice(0, 16)}...{payment.txid.slice(-8)}
+                            </a>
+                          )}
+                        </div>
+                        <p className="text-xs text-white/50">
+                          {new Date(payment.timestamp).toLocaleDateString()}
+                        </p>
                       </div>
-                      <p className="text-xs text-white/50">
-                        {new Date(payment.timestamp).toLocaleDateString()}
-                      </p>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </Card>
           </div>
@@ -209,7 +397,7 @@ export default function SubscriptionDetailPage() {
               
               <div className="mb-6">
                 <p className="text-3xl font-bold mb-4">
-                  {subscription.remainingBalance.toFixed(4)} BTC
+                  {subscription.remainingBalance.toFixed(8)} BTC
                 </p>
                 
                 {/* Progress Bar */}
@@ -243,4 +431,3 @@ export default function SubscriptionDetailPage() {
     </div>
   );
 }
-

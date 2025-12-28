@@ -148,7 +148,7 @@ export in_utxo_0="d8fa4cdade7ac3dff64047dc73b58591ebe638579881b200d4fea68fc84521
 YOUR_ADDRESS="tb1qyour_testnet_address_here"
 
 # Fetch UTXOs via API
-curl "https://api.blockstream.space/testnet/api/address/${YOUR_ADDRESS}/utxo"
+curl "https://api.blockstream.space/testnet4/api/address/${YOUR_ADDRESS}/utxo"
 
 # Output:
 # [
@@ -200,7 +200,7 @@ export CHARMS_APP_VK="8fd3f8f51e13664a94a2f2bc968892cdc1d3151261f535d25b5716da5c
 export CHARMS_APP_ID="$(echo -n "${in_utxo_0}" | sha256sum | cut -d' ' -f1)"
 
 # Prover URL (usually this default)
-export CHARMS_PROVER_URL="https://prover.charms.dev/prove"
+export CHARMS_PROVER_URL="https://v8.charms.dev/spells/prove"
 
 # Network
 export BITCOIN_NETWORK="testnet4"
@@ -221,7 +221,7 @@ export TESTNET_ADDRESS="tb1qyour_address_here"
 - Prefix with `NEXT_PUBLIC_` for client-side access:
   ```bash
   NEXT_PUBLIC_CHARMS_APP_VK=your_vk_here
-  NEXT_PUBLIC_CHARMS_PROVER_URL=https://prover.charms.dev/prove
+  NEXT_PUBLIC_CHARMS_PROVER_URL=https://v8.charms.dev/spells/prove
   ```
 
 #### App ID Calculation
@@ -369,7 +369,7 @@ cat > /tmp/prover_request.json << EOF
 EOF
 
 # Send to Prover
-curl -X POST https://prover.charms.dev/prove \
+curl -X POST https://v8.charms.dev/spells/prove \
   -H "Content-Type: application/json" \
   -d @/tmp/prover_request.json
 ```
@@ -518,14 +518,14 @@ Create these files:
 **`charm-pay-app/.env.test`** (for CLI testing):
 ```bash
 CHARMS_APP_VK=your_verification_key
-CHARMS_PROVER_URL=https://prover.charms.dev/prove
+CHARMS_PROVER_URL=https://v8.charms.dev/spells/prove
 BITCOIN_NETWORK=testnet4
 ```
 
 **`frontend/.env.local`** (for frontend):
 ```bash
 NEXT_PUBLIC_CHARMS_APP_VK=your_verification_key
-NEXT_PUBLIC_CHARMS_PROVER_URL=https://prover.charms.dev/prove
+NEXT_PUBLIC_CHARMS_PROVER_URL=https://v8.charms.dev/spells/prove
 ```
 
 **Don't commit these to git!** Add to `.gitignore`.

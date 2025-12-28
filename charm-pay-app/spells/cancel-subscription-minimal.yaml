@@ -1,0 +1,43 @@
+version: 8
+
+# This spell cancels a subscription with full state validation
+# Only payer can cancel (validated by Bitcoin script)
+
+apps:
+  $00: n/${app_id}/${app_vk}  # NFT app for subscription state
+  $01: t/${app_id}/${app_vk}  # Token app for refund
+
+ins:
+  # Input 1: Subscription NFT (to be cancelled)
+  - utxo_id: ${subscription_utxo}
+    charms:
+      $00:
+        payer_pubkey: ${payer_pubkey}
+        merchant_pubkey: ${merchant_pubkey}
+        amount_sats: ${amount_sats}
+        billing_interval_blocks: ${billing_interval_blocks}
+        last_payment_block: ${last_payment_block}
+        is_active: true
+        remaining_balance: ${remaining_balance}
+  # Input 2: Remaining locked tokens
+  - utxo_id: ${token_utxo}
+    charms:
+      $01: ${remaining_balance}
+
+outs:
+  # Output 1: Cancelled subscription NFT
+  - address: ${subscriber_addr}
+    charms:
+      $00:
+        payer_pubkey: ${payer_pubkey}
+        merchant_pubkey: ${merchant_pubkey}
+        amount_sats: ${amount_sats}
+        billing_interval_blocks: ${billing_interval_blocks}
+        last_payment_block: ${last_payment_block}
+        is_active: false  # Set to false
+        remaining_balance: 0  # Set to zero
+  # Output 2: Refund all remaining tokens
+  - address: ${subscriber_addr}
+    charms:
+      $01: ${remaining_balance}
+

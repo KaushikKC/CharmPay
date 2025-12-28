@@ -1,0 +1,34 @@
+version: 8
+
+# This spell creates a new subscription with minimal state
+# Includes all required fields: payer, merchant, amount, interval, etc.
+
+apps:
+  $00: n/${app_id}/${app_vk}  # NFT app for subscription state
+  $01: t/${app_id}/${app_vk}  # Token app for locked funds
+
+private_inputs:
+  $00: "${in_utxo_0}"  # UTXO being spent to create subscription
+
+ins:
+  # Input: UTXO from subscriber with funds to lock
+  - utxo_id: ${in_utxo_0}
+    charms: {}
+
+outs:
+  # Output 1: Subscription NFT with full state
+  - address: ${subscriber_addr}
+    charms:
+      $00:
+        payer_pubkey: ${payer_pubkey}
+        merchant_pubkey: ${merchant_pubkey}
+        amount_sats: ${amount_sats}
+        billing_interval_blocks: ${billing_interval_blocks}
+        last_payment_block: ${last_payment_block}
+        is_active: true
+        remaining_balance: ${total_locked_amount}
+  # Output 2: Locked tokens
+  - address: ${subscriber_addr}
+    charms:
+      $01: ${total_locked_amount}  # Total tokens locked for subscription payments
+

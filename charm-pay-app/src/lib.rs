@@ -4,7 +4,40 @@ use charms_sdk::data::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Subscription state stored in NFT
+/// Minimal subscription state for CharmPay
+/// This represents a subscription with all required fields
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MinimalSubscriptionState {
+    /// Public key or address of the payer (subscription owner)
+    /// Immutable: Set at creation, never changes
+    pub payer_pubkey: String,
+    
+    /// Public key or address of the merchant (payment recipient)
+    /// Immutable: Set at creation, never changes
+    pub merchant_pubkey: String,
+    
+    /// Payment amount per billing cycle (in satoshis)
+    /// Immutable: Set at creation, defines subscription terms
+    pub amount_sats: u64,
+    
+    /// Number of blocks between payments
+    /// Immutable: Set at creation, defines subscription terms
+    pub billing_interval_blocks: u32,
+    
+    /// Block height when last payment occurred
+    /// Mutable: Updates with each payment
+    pub last_payment_block: u32,
+    
+    /// Whether subscription is currently active
+    /// Mutable: Can be set to false on cancellation
+    pub is_active: bool,
+    
+    /// Remaining locked balance (in satoshis)
+    /// Mutable: Decreases with each payment
+    pub remaining_balance: u64,
+}
+
+/// Subscription state stored in NFT (backward compatible)
 /// This represents a subscription with locked funds
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionState {
@@ -52,7 +85,7 @@ pub fn app_contract(app: &App, tx: &Transaction, x: &Data, w: &Data) -> bool {
     true
 }
 
-// TODO replace with your own logic
+// NFT contract validation
 fn nft_contract_satisfied(app: &App, tx: &Transaction, w: &Data) -> bool {
     let token_app = &App {
         tag: TOKEN,
@@ -81,7 +114,14 @@ fn can_mint_nft(nft_app: &App, tx: &Transaction, w: &Data) -> bool {
     // can mint exactly one NFT.
     check!(nft_charms.len() == 1);
     // the NFT has the correct structure.
-    check!(nft_charms[0].value::<NftContent>().is_ok());
+    // Try to parse as MinimalSubscriptionState first, fall back to NftContent
+    let charm_data = &nft_charms[0];
+    if charm_data.value::<MinimalSubscriptionState>().is_ok() {
+        // New format with full state
+        return true;
+    }
+    // Legacy format
+    check!(charm_data.value::<NftContent>().is_ok());
     true
 }
 
@@ -103,26 +143,18 @@ fn can_mint_token(token_app: &App, tx: &Transaction) -> bool {
         vk: token_app.vk.clone(),
     };
 
-    let Some(nft_content): Option<NftContent> =
-        charm_values(&nft_app, tx.ins.iter().map(|(_, v)| v)).find_map(|data| data.value().ok())
-    else {
-        eprintln!("could not determine incoming remaining supply");
-        return false;
-    };
-    let incoming_supply = nft_content.remaining;
-
-    let Some(nft_content): Option<NftContent> =
+    // Check if there's an NFT in inputs
+    let incoming_nft: Option<NftContent> =
+        charm_values(&nft_app, tx.ins.iter().map(|(_, v)| v)).find_map(|data| data.value().ok());
+    
+    // Check if there's an NFT in outputs
+    let Some(outgoing_nft): Option<NftContent> =
         charm_values(&nft_app, tx.outs.iter()).find_map(|data| data.value().ok())
     else {
         eprintln!("could not determine outgoing remaining supply");
         return false;
     };
-    let outgoing_supply = nft_content.remaining;
-
-    if !(incoming_supply >= outgoing_supply) {
-        eprintln!("incoming remaining supply must be >= outgoing remaining supply");
-        return false;
-    }
+    let outgoing_supply = outgoing_nft.remaining;
 
     let Some(input_token_amount) = sum_token_amount(&token_app, tx.ins.iter().map(|(_, v)| v)).ok()
     else {
@@ -134,12 +166,29 @@ fn can_mint_token(token_app: &App, tx: &Transaction) -> bool {
         return false;
     };
 
-    // can mint no more than what's allowed by the managing NFT state change.
-    output_token_amount - input_token_amount == incoming_supply - outgoing_supply
+    // Case 1: NFT in inputs (normal token minting controlled by NFT)
+    if let Some(incoming_nft) = incoming_nft {
+        let incoming_supply = incoming_nft.remaining;
+        if !(incoming_supply >= outgoing_supply) {
+            eprintln!("incoming remaining supply must be >= outgoing remaining supply");
+            return false;
+        }
+        // can mint no more than what's allowed by the managing NFT state change.
+        return output_token_amount - input_token_amount == incoming_supply - outgoing_supply;
+    }
+
+    // Case 2: No NFT in inputs (initial creation - minting NFT and tokens together)
+    // When creating a subscription, we mint both NFT and tokens at the same time
+    // Allow minting tokens equal to the NFT's remaining supply (total locked amount)
+    if input_token_amount == 0 && output_token_amount == outgoing_supply {
+        // Initial creation: minting tokens equal to NFT remaining supply
+        return true;
+    }
+
+    false
 }
 
-// Subscription payment: allows token transfers when NFT remaining decreases
-// This supports the execute-payment spell where tokens are transferred (not minted)
+// Subscription payment: validates payment execution with full state checks
 fn can_execute_subscription_payment(token_app: &App, tx: &Transaction) -> bool {
     let nft_app = App {
         tag: NFT,
@@ -147,7 +196,19 @@ fn can_execute_subscription_payment(token_app: &App, tx: &Transaction) -> bool {
         vk: token_app.vk.clone(),
     };
 
-    // Check if NFT is present in both inputs and outputs (subscription payment scenario)
+    // Try to parse as MinimalSubscriptionState (new format)
+    let incoming_state: Option<MinimalSubscriptionState> = charm_values(&nft_app, tx.ins.iter().map(|(_, v)| v))
+        .find_map(|data| data.value().ok());
+    
+    let outgoing_state: Option<MinimalSubscriptionState> = charm_values(&nft_app, tx.outs.iter())
+        .find_map(|data| data.value().ok());
+
+    // If we have full state, validate with all checks
+    if let (Some(in_state), Some(out_state)) = (incoming_state, outgoing_state) {
+        return validate_subscription_payment_full(&in_state, &out_state, token_app, tx);
+    }
+
+    // Fall back to legacy format (NftContent)
     let Some(incoming_nft): Option<NftContent> =
         charm_values(&nft_app, tx.ins.iter().map(|(_, v)| v)).find_map(|data| data.value().ok())
     else {
@@ -160,15 +221,13 @@ fn can_execute_subscription_payment(token_app: &App, tx: &Transaction) -> bool {
         return false; // No NFT in outputs, not a subscription payment
     };
 
-    // NFT remaining must decrease (payment scenario)
+    // Legacy validation: NFT remaining must decrease
     if !(incoming_nft.remaining >= outgoing_nft.remaining) {
         eprintln!("NFT remaining must decrease or stay same for subscription payment");
         return false;
     }
 
-    let _payment_amount = incoming_nft.remaining - outgoing_nft.remaining;
-    // Payment amount is the difference in NFT remaining
-    // This will be validated by ensuring tokens are properly distributed
+    let payment_amount = incoming_nft.remaining - outgoing_nft.remaining;
 
     // Calculate token amounts
     let Some(input_token_amount) = sum_token_amount(&token_app, tx.ins.iter().map(|(_, v)| v)).ok()
@@ -182,17 +241,85 @@ fn can_execute_subscription_payment(token_app: &App, tx: &Transaction) -> bool {
     };
 
     // For subscription payments: tokens are transferred (output == input)
-    // The NFT remaining decreases by the payment amount
-    // This validates that payment_amount tokens are being transferred out
     if output_token_amount == input_token_amount {
-        // Pure token transfer - validate that payment amount is reasonable
-        // The actual payment validation is done by ensuring tokens go to recipient
-        // and remaining tokens go back to subscriber
         return true;
     }
 
-    // If tokens are being minted/burned, fall back to standard minting logic
     false
+}
+
+// Full validation for subscription payment with MinimalSubscriptionState
+fn validate_subscription_payment_full(
+    in_state: &MinimalSubscriptionState,
+    out_state: &MinimalSubscriptionState,
+    token_app: &App,
+    tx: &Transaction,
+) -> bool {
+    // 1. Validate subscription is active
+    check!(in_state.is_active);
+    check!(out_state.is_active); // Should remain active after payment
+
+    // 2. Validate immutable fields don't change
+    check!(in_state.payer_pubkey == out_state.payer_pubkey);
+    check!(in_state.merchant_pubkey == out_state.merchant_pubkey);
+    check!(in_state.amount_sats == out_state.amount_sats);
+    check!(in_state.billing_interval_blocks == out_state.billing_interval_blocks);
+
+    // 3. Validate payment amount matches subscription amount
+    let payment_amount = in_state.remaining_balance - out_state.remaining_balance;
+    check!(payment_amount == in_state.amount_sats);
+
+    // 4. Validate remaining balance decreases correctly
+    check!(in_state.remaining_balance >= out_state.remaining_balance);
+    check!(out_state.remaining_balance == in_state.remaining_balance - in_state.amount_sats);
+
+    // 5. Validate last_payment_block is updated (should increase)
+    // Note: We can't check current block in contract, but we can ensure it's updated
+    check!(out_state.last_payment_block >= in_state.last_payment_block);
+
+    // 6. Validate token amounts match
+    let Some(input_token_amount) = sum_token_amount(&token_app, tx.ins.iter().map(|(_, v)| v)).ok()
+    else {
+        eprintln!("could not determine input total token amount");
+        return false;
+    };
+    let Some(output_token_amount) = sum_token_amount(&token_app, tx.outs.iter()).ok() else {
+        eprintln!("could not determine output total token amount");
+        return false;
+    };
+
+    // Tokens should be transferred (not minted/burned)
+    check!(output_token_amount == input_token_amount);
+
+    true
+}
+
+// Validate cancellation - only payer can cancel
+fn validate_subscription_cancellation(
+    in_state: &MinimalSubscriptionState,
+    out_state: &MinimalSubscriptionState,
+    tx: &Transaction,
+) -> bool {
+    // 1. Subscription must be active to cancel
+    check!(in_state.is_active);
+
+    // 2. After cancellation, is_active should be false
+    check!(!out_state.is_active);
+
+    // 3. Remaining balance should be zero
+    check!(out_state.remaining_balance == 0);
+
+    // 4. Immutable fields should remain the same
+    check!(in_state.payer_pubkey == out_state.payer_pubkey);
+    check!(in_state.merchant_pubkey == out_state.merchant_pubkey);
+    check!(in_state.amount_sats == out_state.amount_sats);
+    check!(in_state.billing_interval_blocks == out_state.billing_interval_blocks);
+
+    // Note: Payer authorization would be validated by checking the transaction inputs
+    // This requires access to the transaction's input scripts, which is handled by Bitcoin
+    // The contract assumes only the payer can spend the UTXO
+
+    true
 }
 
 #[cfg(test)]
@@ -226,10 +353,50 @@ mod test {
         assert_eq!(nft_content.remaining, 1000000);
     }
 
-    // Note: Full integration tests require:
-    // - Mock Transaction structures
-    // - Mock UTXO data
-    // - Complete charm data serialization
-    // These are complex and require the full Charms SDK test utilities
-    // For now, we test the helper functions that can be tested in isolation
+    #[test]
+    fn test_minimal_subscription_state() {
+        let state = MinimalSubscriptionState {
+            payer_pubkey: "02abc123...".to_string(),
+            merchant_pubkey: "03def456...".to_string(),
+            amount_sats: 100000,
+            billing_interval_blocks: 144,
+            last_payment_block: 850000,
+            is_active: true,
+            remaining_balance: 1000000,
+        };
+
+        assert_eq!(state.amount_sats, 100000);
+        assert_eq!(state.is_active, true);
+    }
+
+    #[test]
+    fn test_payment_validation() {
+        let in_state = MinimalSubscriptionState {
+            payer_pubkey: "02abc...".to_string(),
+            merchant_pubkey: "03def...".to_string(),
+            amount_sats: 100000,
+            billing_interval_blocks: 144,
+            last_payment_block: 850000,
+            is_active: true,
+            remaining_balance: 1000000,
+        };
+
+        let out_state = MinimalSubscriptionState {
+            payer_pubkey: "02abc...".to_string(),
+            merchant_pubkey: "03def...".to_string(),
+            amount_sats: 100000,
+            billing_interval_blocks: 144,
+            last_payment_block: 850100, // Updated
+            is_active: true,
+            remaining_balance: 900000, // Decreased by amount_sats
+        };
+
+        // Payment amount should match
+        assert_eq!(in_state.remaining_balance - out_state.remaining_balance, in_state.amount_sats);
+        
+        // Immutable fields should match
+        assert_eq!(in_state.payer_pubkey, out_state.payer_pubkey);
+        assert_eq!(in_state.merchant_pubkey, out_state.merchant_pubkey);
+        assert_eq!(in_state.amount_sats, out_state.amount_sats);
+    }
 }

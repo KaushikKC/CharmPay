@@ -81,8 +81,8 @@ export async function connectXverseWallet(): Promise<WalletConnectionResult> {
       try {
         balanceResult = await fetchBTCBalanceViaSatsConnect();
       } catch (error) {
-        console.warn("Failed to fetch balance via sats-connect, using Blockstream fallback:", error);
-        // Fallback to Blockstream API if sats-connect fails
+        // Silently fallback to Blockstream API if sats-connect fails
+        // This is expected in some scenarios (e.g., wallet not fully connected)
         balanceResult = await fetchBTCBalanceFromBlockstream(paymentAddressItem.address, "Testnet");
       }
 
@@ -196,11 +196,11 @@ export async function fetchBTCBalanceViaSatsConnect(): Promise<number> {
     }
     
     // If sats-connect fails, throw error so caller can use fallback
-    console.error("Failed to fetch balance via sats-connect:", response.error);
+    // Don't log as error since fallback will be used
     throw new Error(response.error?.message || "Failed to fetch balance");
   } catch (error) {
-    console.error("Error fetching balance via sats-connect:", error);
-    throw error; // Re-throw so caller can handle fallback
+    // Re-throw so caller can handle fallback (don't log as error)
+    throw error;
   }
 }
 
@@ -298,20 +298,35 @@ export async function updateStoredWalletBalance(): Promise<XverseWallet | null> 
 
   try {
     // Try to get balance via sats-connect first (if wallet is still connected)
-    const balance = await fetchBTCBalanceViaSatsConnect();
+    let balance = 0;
+    try {
+      balance = await fetchBTCBalanceViaSatsConnect();
+    } catch (error) {
+      // Silently fallback to Blockstream - this is expected behavior
+      // Don't log as error since fallback will handle it
+    }
     
-    // If sats-connect returns 0 and we have an address, try Blockstream
-    const finalBalance = balance > 0 ? balance : await refreshWalletBalance(stored.paymentAddress, stored.network);
+    // If sats-connect fails or returns 0, use Blockstream fallback
+    if (balance === 0 && stored.paymentAddress) {
+      try {
+        balance = await refreshWalletBalance(stored.paymentAddress, stored.network);
+      } catch (fallbackError) {
+        // If both fail, keep existing balance
+        console.warn("Could not fetch balance from either source, keeping existing balance");
+        return stored;
+      }
+    }
     
     const updatedWallet: XverseWallet = {
       ...stored,
-      balanceBTC: finalBalance,
+      balanceBTC: balance,
     };
     
     storeWallet(updatedWallet);
     return updatedWallet;
   } catch (error) {
-    console.error("Error updating wallet balance:", error);
+    // Only log unexpected errors, not expected fallback scenarios
+    console.warn("Error updating wallet balance (using existing balance):", error);
     // Fallback to Blockstream
     const balance = await refreshWalletBalance(stored.paymentAddress, stored.network);
     const updatedWallet: XverseWallet = {

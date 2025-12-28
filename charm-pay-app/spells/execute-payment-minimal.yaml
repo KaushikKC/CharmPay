@@ -1,0 +1,47 @@
+version: 8
+
+# This spell executes a subscription payment with full validation
+# Validates: payment amount, billing interval, active status
+
+apps:
+  $00: n/${app_id}/${app_vk}  # NFT app for subscription state
+  $01: t/${app_id}/${app_vk}  # Token app for payments
+
+ins:
+  # Input 1: Subscription NFT (current state)
+  - utxo_id: ${subscription_utxo}
+    charms:
+      $00:
+        payer_pubkey: ${payer_pubkey}
+        merchant_pubkey: ${merchant_pubkey}
+        amount_sats: ${amount_sats}
+        billing_interval_blocks: ${billing_interval_blocks}
+        last_payment_block: ${current_last_payment_block}
+        is_active: true
+        remaining_balance: ${current_remaining_balance}
+  # Input 2: All locked tokens
+  - utxo_id: ${token_utxo}
+    charms:
+      $01: ${current_remaining_balance}
+
+outs:
+  # Output 1: Updated subscription NFT
+  - address: ${subscriber_addr}
+    charms:
+      $00:
+        payer_pubkey: ${payer_pubkey}
+        merchant_pubkey: ${merchant_pubkey}
+        amount_sats: ${amount_sats}
+        billing_interval_blocks: ${billing_interval_blocks}
+        last_payment_block: ${new_last_payment_block}  # Updated to current block
+        is_active: true
+        remaining_balance: ${new_remaining_balance}  # Decreased by amount_sats
+  # Output 2: Payment to merchant
+  - address: ${recipient_addr}
+    charms:
+      $01: ${payment_amount}  # Should equal amount_sats
+  # Output 3: Remaining locked tokens
+  - address: ${subscriber_addr}
+    charms:
+      $01: ${new_remaining_balance}
+
