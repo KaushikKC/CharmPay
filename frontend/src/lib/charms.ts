@@ -53,6 +53,10 @@ export interface ProverResponse {
 
 /**
  * Generate spell JSON for creating a subscription
+ * 
+ * NOTE: The contract expects MinimalSubscriptionState with all fields.
+ * However, for backward compatibility, we're using the simplified format
+ * with just ticker and remaining. The contract should handle both formats.
  */
 export function createSubscriptionSpell(params: {
   appId: string;
@@ -61,7 +65,31 @@ export function createSubscriptionSpell(params: {
   subscriptionId: string;
   totalLockedAmount: number; // satoshis
   fundingUtxo: string;
+  payerPubkey?: string; // Optional: payer public key
+  merchantPubkey?: string; // Optional: merchant public key
+  amountSats?: number; // Optional: amount per cycle
+  billingIntervalBlocks?: number; // Optional: billing interval
+  lastPaymentBlock?: number; // Optional: last payment block (usually 0 for new subscriptions)
 }): Spell {
+  // Use simplified format for backward compatibility
+  // The contract should accept both formats
+  const nftContent: any = {
+    ticker: `SUBSCRIPTION-${params.subscriptionId}`,
+    remaining: params.totalLockedAmount,
+  };
+
+  // If full state fields are provided, include them
+  // This matches the MinimalSubscriptionState structure
+  if (params.payerPubkey && params.merchantPubkey && params.amountSats !== undefined) {
+    nftContent.payer_pubkey = params.payerPubkey;
+    nftContent.merchant_pubkey = params.merchantPubkey;
+    nftContent.amount_sats = params.amountSats;
+    nftContent.billing_interval_blocks = params.billingIntervalBlocks || 144; // Default: ~1 day
+    nftContent.last_payment_block = params.lastPaymentBlock || 0; // Default: 0 for new subscriptions
+    nftContent.is_active = true;
+    nftContent.remaining_balance = params.totalLockedAmount;
+  }
+
   return {
     version: 8,
     apps: {
@@ -81,10 +109,7 @@ export function createSubscriptionSpell(params: {
       {
         address: params.subscriberAddress,
         charms: {
-          $00: {
-            ticker: `SUBSCRIPTION-${params.subscriptionId}`,
-            remaining: params.totalLockedAmount,
-          },
+          $00: nftContent,
         },
       },
       {
@@ -224,6 +249,25 @@ export async function proveSpell(
   proverUrl: string = 'https://v8.charms.dev/spells/prove'
 ): Promise<string[] | ProverResponse> {
   try {
+    // Log request details for debugging (without sensitive data)
+    // Also log the full spell JSON to see what's being sent
+    const spellJson = JSON.stringify(request.spell);
+    console.log('Prover API request:', {
+      chain: request.chain,
+      funding_utxo: request.funding_utxo,
+      funding_utxo_value: request.funding_utxo_value,
+      change_address: request.change_address,
+      fee_rate: request.fee_rate,
+      prev_txs_count: request.prev_txs?.length || 0,
+      binaries_count: Object.keys(request.binaries || {}).length,
+      spell_version: request.spell?.version,
+      spell_apps_count: Object.keys(request.spell?.apps || {}).length,
+      spell_ins_count: request.spell?.ins?.length || 0,
+      spell_outs_count: request.spell?.outs?.length || 0,
+      spell_private_inputs: request.spell?.private_inputs,
+      full_spell_json: spellJson.substring(0, 500) + '...', // First 500 chars
+    });
+    
     const response = await fetch(proverUrl, {
       method: 'POST',
       headers: {
@@ -233,11 +277,34 @@ export async function proveSpell(
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Prover API error (${response.status}): ${error}`);
+      let errorMessage: string;
+      try {
+        const errorText = await response.text();
+        // Try to parse as JSON first
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.message || errorJson.error || errorText;
+        } catch {
+          // Not JSON, use as-is
+          errorMessage = errorText;
+        }
+      } catch {
+        errorMessage = `HTTP ${response.status} ${response.statusText}`;
+      }
+      
+      // Log the full error for debugging
+      console.error('Prover API error details:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorMessage,
+        url: proverUrl
+      });
+      
+      throw new Error(`Prover API error (${response.status}): ${errorMessage}`);
     }
 
-    // Prover returns [commit_tx, spell_tx] as an array of hex strings
+    // Prover returns [commit_tx, spell_tx] as an array
+    // Each transaction can be a hex string or an object with bitcoin/cardano field
     const result = await response.json();
     
     // Log the raw response for debugging
@@ -245,49 +312,18 @@ export async function proveSpell(
       isArray: Array.isArray(result),
       length: Array.isArray(result) ? result.length : 'N/A',
       keys: !Array.isArray(result) && typeof result === 'object' ? Object.keys(result) : [],
-      preview: JSON.stringify(result).substring(0, 200)
+      preview: JSON.stringify(result).substring(0, 200),
+      firstItemType: Array.isArray(result) && result.length > 0 ? typeof result[0] : 'N/A',
+      firstItemKeys: Array.isArray(result) && result.length > 0 && typeof result[0] === 'object' ? Object.keys(result[0]) : []
     });
     
-    // Return as array (official format) or as object for backward compatibility
-    if (Array.isArray(result)) {
-      if (result.length === 2 && result[0] && result[1]) {
-        return result;
-      } else {
-        console.error('Prover returned array with invalid format:', {
-          length: result.length,
-          hasCommit: !!result[0],
-          hasSpell: !!result[1],
-          commitType: typeof result[0],
-          spellType: typeof result[1]
-        });
-        throw new Error(`Prover returned invalid array format: expected 2 non-empty strings, got length ${result.length}`);
-      }
-    }
-    
-    // If it's an object, extract commit_tx and spell_tx
-    if (result && typeof result === 'object') {
-      const commitTx = result.commit_tx || result[0] || '';
-      const spellTx = result.spell_tx || result[1] || '';
-      
-      if (!commitTx || !spellTx) {
-        console.error('Prover returned object with missing transactions:', {
-          hasCommit: !!commitTx,
-          hasSpell: !!spellTx,
-          commitLength: typeof commitTx === 'string' ? commitTx.length : 'N/A',
-          spellLength: typeof spellTx === 'string' ? spellTx.length : 'N/A'
-        });
-        throw new Error('Prover response missing commit_tx or spell_tx');
-      }
-      
-      return {
-        commit_tx: commitTx,
-        spell_tx: spellTx,
-      };
-    }
-    
-    // Unexpected format
-    console.error('Unexpected Prover response format:', result);
-    throw new Error('Prover returned unexpected response format');
+    // Return as-is - let subscriptionFlow.ts handle the format conversion
+    // The Prover can return:
+    // - Array of hex strings: ["hex1", "hex2"]
+    // - Array of objects: [{"bitcoin": "hex1"}, {"bitcoin": "hex2"}]
+    // - Object: { commit_tx: "hex1", spell_tx: "hex2" }
+    // - Object with nested objects: { commit_tx: {"bitcoin": "hex1"}, spell_tx: {"bitcoin": "hex2"} }
+    return result;
   } catch (error) {
     if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
       throw new Error(

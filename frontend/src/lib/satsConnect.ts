@@ -74,7 +74,8 @@ function createPsbt(_network: 'mainnet' | 'testnet4'): bitcoin.Psbt {
  */
 export async function signTransaction(
   signRequest: SignTransactionRequest,
-  wallet: SatsConnectWallet
+  wallet: SatsConnectWallet,
+  previousTransactions?: Array<{ txid: string; hex: string }> // Optional: previous tx data for PSBT
 ): Promise<string> {
   try {
     const btcNetwork = getBitcoinNetwork(signRequest.network);
@@ -83,20 +84,87 @@ export async function signTransaction(
     const tx = bitcoin.Transaction.fromHex(signRequest.psbt);
     
     // Create PSBT from transaction for signing
-    // bitcoinjs-lib v7: Psbt constructor doesn't take network parameter
-    const psbt = createPsbt(signRequest.network);
+    const psbt = new bitcoin.Psbt({ network: btcNetwork });
     
-    // Add inputs (simplified - would need prev tx data in production)
-    // Note: For proper signing, we need witnessUtxo or nonWitnessUtxo
-    // This is a placeholder - full implementation requires fetching previous transactions
-    // TODO: Implement proper PSBT creation with previous transaction outputs
-    // For now, we'll skip PSBT creation and return an error explaining what's needed
-    console.warn('PSBT creation requires previous transaction outputs - not yet fully implemented');
+    // Add inputs with previous transaction outputs
+    for (let i = 0; i < tx.ins.length; i++) {
+      const input = tx.ins[i];
+      const prevTxId = Buffer.from(input.hash).reverse().toString('hex');
+      const prevVout = input.index;
+      
+      // Try to find previous transaction in provided data
+      let prevTxHex: string | undefined;
+      if (previousTransactions) {
+        const prevTx = previousTransactions.find(pt => pt.txid === prevTxId);
+        if (prevTx) {
+          prevTxHex = prevTx.hex;
+        }
+      }
+      
+      // If not provided, fetch it
+      if (!prevTxHex) {
+        try {
+          prevTxHex = await getPreviousTransaction(prevTxId, signRequest.network);
+        } catch (error) {
+          console.warn(`Failed to fetch previous transaction ${prevTxId} for input ${i}:`, error);
+          // Continue - wallet might be able to sign without it
+        }
+      }
+      
+      if (prevTxHex) {
+        // Parse previous transaction to get output script and value
+        const prevTx = bitcoin.Transaction.fromHex(prevTxHex);
+        const prevOutput = prevTx.outs[prevVout];
+        
+        if (prevOutput) {
+          // Check if it's a SegWit output (P2WPKH, P2WSH, P2TR)
+          const isSegWit = prevOutput.script[0] === 0x00 && 
+                          (prevOutput.script[1] === 0x14 || prevOutput.script[1] === 0x20 || prevOutput.script[1] === 0x01);
+          
+          if (isSegWit) {
+            // Use witnessUtxo for SegWit outputs
+            psbt.addInput({
+              hash: prevTxId,
+              index: prevVout,
+              witnessUtxo: {
+                script: prevOutput.script,
+                value: prevOutput.value,
+              },
+            });
+          } else {
+            // Use nonWitnessUtxo for legacy outputs
+            psbt.addInput({
+              hash: prevTxId,
+              index: prevVout,
+              nonWitnessUtxo: Buffer.from(prevTxHex, 'hex'),
+            });
+          }
+        } else {
+          throw new Error(`Previous transaction ${prevTxId} output ${prevVout} not found`);
+        }
+      } else {
+        // Fallback: add input without previous tx data (wallet might handle it)
+        console.warn(`Adding input ${i} without previous transaction data - wallet may handle it`);
+        psbt.addInput({
+          hash: prevTxId,
+          index: prevVout,
+        } as any);
+      }
+    }
     
     // Add outputs
     for (const output of tx.outs) {
+      // Decode output script to get address
+      let address: string;
+      try {
+        address = bitcoin.address.fromOutputScript(output.script, btcNetwork);
+      } catch {
+        // If we can't decode, use empty string (PSBT will still work)
+        address = '';
+      }
+      
       psbt.addOutput({
-        address: '', // Would decode from script in production
+        address,
         value: output.value,
       });
     }
@@ -115,8 +183,7 @@ export async function signTransaction(
       const signedPsbtBase64 = result.psbt || psbtBase64;
       
       // Extract signed transaction hex from PSBT
-      // bitcoinjs-lib v7: fromBase64 doesn't take network parameter
-      const signedPsbt = bitcoin.Psbt.fromBase64(signedPsbtBase64);
+      const signedPsbt = bitcoin.Psbt.fromBase64(signedPsbtBase64, { network: btcNetwork });
       signedPsbt.finalizeAllInputs();
       const signedTx = signedPsbt.extractTransaction();
       
@@ -126,6 +193,7 @@ export async function signTransaction(
     throw new Error((response.error as any)?.message || 'Failed to sign transaction');
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Transaction signing error:', error);
     
     // Provide helpful error message
     throw new Error(

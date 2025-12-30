@@ -24,6 +24,7 @@ import {
   type SatsConnectWallet 
 } from './satsConnect';
 import { extractCharms } from './charms';
+import * as bitcoin from 'bitcoinjs-lib';
 
 // Configuration
 const PROVER_URL = process.env.NEXT_PUBLIC_CHARMS_PROVER_URL || 'https://v8.charms.dev/spells/prove';
@@ -135,9 +136,30 @@ export async function createSubscription(params: {
   // 2. Get funding UTXO
   // According to Charms docs, each spell needs a unique funding UTXO
   // to avoid "duplicate funding UTXO spend with different spell" error
-  const utxos = await getUnspentUtxos(wallet.address, NETWORK);
+  // Note: The Prover tracks UTXOs server-side, so even if a UTXO appears unspent,
+  // it might be in use if there's a pending transaction
+  let utxos = await getUnspentUtxos(wallet.address, NETWORK);
   if (utxos.length === 0) {
-    throw new Error('No UTXOs available for funding');
+    throw new Error('No UTXOs available for funding. Please fund your wallet with testnet Bitcoin.');
+  }
+  
+  // Filter out UTXOs that are marked as used locally
+  // This helps avoid retrying UTXOs we know are problematic
+  const usedUtxos = getUsedUtxos();
+  const availableUtxos = utxos.filter(utxo => {
+    const utxoId = `${utxo.txid}:${utxo.vout}`;
+    return !usedUtxos.has(utxoId);
+  });
+  
+  // If we have available UTXOs after filtering, use those
+  // Otherwise, clear cache and use all UTXOs (they might have been confirmed)
+  if (availableUtxos.length > 0) {
+    utxos = availableUtxos;
+    console.log(`Filtered to ${utxos.length} available UTXOs (excluding ${usedUtxos.size} used)`);
+  } else {
+    console.warn('All UTXOs are marked as used locally. Clearing cache and trying all UTXOs...');
+    clearUsedUtxos();
+    // Keep original utxos list
   }
 
   // Select a fresh UTXO that hasn't been used for another spell
@@ -152,9 +174,14 @@ export async function createSubscription(params: {
   // The Prover tracks UTXOs server-side, so we need to retry with different UTXOs
   let proverResponse;
   let attempts = 0;
-  const maxAttempts = Math.min(utxos.length, 5); // Try up to 5 different UTXOs
+  const maxAttempts = Math.min(utxos.length, 5); // Try up to 5 different UTXOs per refresh cycle
+  let refreshCycles = 0;
+  const maxRefreshCycles = 2; // Maximum number of times to refresh UTXO list (prevents infinite loop)
   
-  while (attempts < maxAttempts) {
+  // Store the first spell JSON to compare with subsequent attempts
+  let firstSpellHash: string | null = null;
+  
+  while (attempts < maxAttempts && refreshCycles < maxRefreshCycles) {
     // Mark this UTXO as used to prevent reuse
     markUtxoAsUsed(fundingUtxoId);
     console.log(`Attempt ${attempts + 1}/${maxAttempts}: Using funding UTXO: ${fundingUtxoId} (value: ${fundingUtxo.value} sats)`);
@@ -169,6 +196,63 @@ export async function createSubscription(params: {
       fundingUtxo: fundingUtxoId,
     });
 
+    // Log spell JSON for debugging (to check if it's changing)
+    // IMPORTANT: The spell JSON SHOULD change when we use a different UTXO
+    // because fundingUtxo is part of the spell structure
+    const spellHash = JSON.stringify(spell);
+    const spellHashShort = spellHash.substring(0, 300);
+    
+    // Extract just the parts that should NOT change (to verify consistency)
+    const spellWithoutUtxo = {
+      version: spell.version,
+      apps: spell.apps,
+      subscriptionId: params.subscriptionId,
+      totalLocked: params.totalLocked,
+      subscriberAddress: wallet.address,
+    };
+    const spellWithoutUtxoHash = JSON.stringify(spellWithoutUtxo);
+    
+    if (firstSpellHash === null) {
+      firstSpellHash = spellHash;
+      console.log(`📝 First spell JSON generated:`, {
+        fundingUtxo: fundingUtxoId,
+        subscriptionId: params.subscriptionId,
+        totalLocked: params.totalLocked,
+        subscriberAddress: wallet.address,
+        spellWithoutUtxo: spellWithoutUtxoHash,
+        fullSpellPreview: spellHashShort + '...',
+      });
+    } else {
+      // Compare spell parts that should NOT change
+      const previousSpellWithoutUtxo = JSON.parse(firstSpellHash);
+      const previousSpellWithoutUtxoHash = JSON.stringify({
+        version: previousSpellWithoutUtxo.version,
+        apps: previousSpellWithoutUtxo.apps,
+        subscriptionId: params.subscriptionId,
+        totalLocked: params.totalLocked,
+        subscriberAddress: wallet.address,
+      });
+      
+      const consistentPartsMatch = spellWithoutUtxoHash === previousSpellWithoutUtxoHash;
+      
+      console.log(`📝 Spell JSON (attempt ${attempts + 1}):`, {
+        fundingUtxo: fundingUtxoId,
+        consistentPartsMatch: consistentPartsMatch,
+        spellWithoutUtxo: spellWithoutUtxoHash.substring(0, 200),
+        fullSpellPreview: spellHashShort + '...',
+      });
+      
+      if (!consistentPartsMatch) {
+        console.error('❌ ERROR: Spell JSON has INCONSISTENT parts (should be same)!', {
+          previous: previousSpellWithoutUtxoHash.substring(0, 200),
+          current: spellWithoutUtxoHash.substring(0, 200),
+        });
+        throw new Error('Spell JSON has inconsistent parts between attempts. This should not happen!');
+      } else {
+        console.log('✅ Spell JSON consistent parts match (only fundingUtxo changed, which is expected)');
+      }
+    }
+
     // Get previous transactions (required by Prover)
     const prevTxs = await fetchPreviousTransactions(
       [{ txid: fundingUtxo.txid, vout: fundingUtxo.vout }],
@@ -180,9 +264,27 @@ export async function createSubscription(params: {
     const binaries: Record<string, string> = {};
     if (APP_VK) {
       binaries[APP_VK] = params.wasmBinary;
+      console.log(`Including binary for app VK: ${APP_VK.substring(0, 16)}... (binary length: ${params.wasmBinary.length})`);
+    } else {
+      console.warn('APP_VK is not set - binaries map will be empty');
     }
 
     try {
+      console.log(`Attempting to prove spell with UTXO ${fundingUtxoId}...`);
+      console.log('📤 Prover request details:', {
+        funding_utxo: fundingUtxoId,
+        funding_utxo_value: fundingUtxo.value,
+        change_address: wallet.address,
+        fee_rate: 1.0,
+        prev_txs_count: prevTxs.length,
+        binaries_count: Object.keys(binaries).length,
+        spell_version: spell.version,
+        spell_apps: Object.keys(spell.apps),
+        spell_ins_count: spell.ins?.length || 0,
+        spell_outs_count: spell.outs?.length || 0,
+        spell_private_inputs: spell.private_inputs,
+      });
+      
       proverResponse = await proveSpell(
         {
           chain: 'bitcoin', // Required: specify chain type
@@ -198,9 +300,13 @@ export async function createSubscription(params: {
       );
       
       // Success! Break out of retry loop
+      console.log('✅ Prover API call successful!');
       break;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Log the full error for debugging
+      console.error(`Prover API error for UTXO ${fundingUtxoId}:`, errorMessage);
       
       // Check if it's a duplicate UTXO error
       if (errorMessage.includes('duplicate funding UTXO') || errorMessage.includes('duplicate funding UTXO spend')) {
@@ -211,29 +317,67 @@ export async function createSubscription(params: {
         
         // Try next UTXO
         attempts++;
-        if (attempts >= maxAttempts) {
-          // Clear cache and try one more time with fresh UTXOs
+        
+        // If we've tried all available UTXOs, refresh the list (but limit refresh cycles)
+        if (attempts >= maxAttempts || attempts >= utxos.length) {
+          refreshCycles++;
+          
+          if (refreshCycles >= maxRefreshCycles) {
+            // We've exhausted all retry attempts
+            throw new Error(
+              `Failed to create subscription after ${refreshCycles} refresh cycles and ${attempts} UTXO attempts.\n\n` +
+              `All available UTXOs are being rejected by the Prover with "duplicate funding UTXO spend with different spell".\n\n` +
+              `This usually means:\n` +
+              `1. The Prover's server-side cache has these UTXOs marked as used\n` +
+              `2. You have pending transactions that are using these UTXOs\n` +
+              `3. The spell JSON is changing between attempts (should not happen)\n\n` +
+              `Solutions:\n` +
+              `- Wait 10-15 minutes for the Prover's cache to clear and pending transactions to confirm\n` +
+              `- Fund your wallet with more testnet Bitcoin to get fresh UTXOs\n` +
+              `- Check mempool.space/testnet4 for pending transactions\n` +
+              `- Try again later after transactions have confirmed`
+            );
+          }
+          
+          console.warn(`Tried ${attempts} UTXOs, all appear to be in use. Refreshing UTXO list (cycle ${refreshCycles}/${maxRefreshCycles})...`);
+          
+          // Add a delay before refreshing to give Prover time to clear cache
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
+          
+          // Clear cache and refresh UTXOs from blockchain
           clearUsedUtxos();
           const freshUtxos = await getUnspentUtxos(wallet.address, NETWORK);
+          
           if (freshUtxos.length === 0) {
-            throw new Error('No UTXOs available for funding. All UTXOs have been used or are pending.');
+            throw new Error(
+              'No UTXOs available for funding. All UTXOs appear to be in use.\n\n' +
+              'Possible reasons:\n' +
+              '1. You have pending transactions that are using these UTXOs\n' +
+              '2. The Prover has these UTXOs marked as used from previous attempts\n' +
+              '3. You need more testnet Bitcoin\n\n' +
+              'Solutions:\n' +
+              '- Wait 5-10 minutes for pending transactions to confirm\n' +
+              '- Fund your wallet with more testnet Bitcoin\n' +
+              '- Check mempool.space/testnet4 for pending transactions'
+            );
           }
+          
+          // Reset attempts and try with fresh UTXOs
+          attempts = 0;
+          utxos = freshUtxos;
           fundingUtxo = freshUtxos[0];
           fundingUtxoId = `${fundingUtxo.txid}:${fundingUtxo.vout}`;
+          console.log(`Refreshed UTXO list, found ${freshUtxos.length} UTXOs. Trying again...`);
           continue;
         }
         
-        // Select next fresh UTXO
+        // Select next fresh UTXO from current list
         const nextUtxo = selectFreshFundingUtxo(utxos);
         if (!nextUtxo) {
-          // All UTXOs used, clear cache and refresh
-          clearUsedUtxos();
-          const freshUtxos = await getUnspentUtxos(wallet.address, NETWORK);
-          if (freshUtxos.length === 0) {
-            throw new Error('No UTXOs available for funding. Please fund your wallet with more testnet Bitcoin.');
-          }
-          fundingUtxo = freshUtxos[0];
-          fundingUtxoId = `${fundingUtxo.txid}:${fundingUtxo.vout}`;
+          // All UTXOs in current list are used - this will trigger refresh in next iteration
+          // Increment attempts to trigger refresh logic
+          attempts = maxAttempts;
+          continue;
         } else {
           fundingUtxo = nextUtxo;
           fundingUtxoId = `${fundingUtxo.txid}:${fundingUtxo.vout}`;
@@ -247,25 +391,77 @@ export async function createSubscription(params: {
     }
   }
   
+  // Check if we exited the loop without success
   if (!proverResponse) {
-    throw new Error(`Failed to prove spell after ${maxAttempts} attempts. All UTXOs appear to be in use. Please wait for pending transactions to confirm or fund your wallet with more testnet Bitcoin.`);
+    if (refreshCycles >= maxRefreshCycles) {
+      throw new Error(
+        `Failed to create subscription after ${maxRefreshCycles} refresh cycles and ${attempts} UTXO attempts.\n\n` +
+        `All available UTXOs are being rejected by the Prover with "duplicate funding UTXO spend with different spell".\n\n` +
+        `This usually means:\n` +
+        `1. The Prover's server-side cache has these UTXOs marked as used\n` +
+        `2. You have pending transactions that are using these UTXOs\n` +
+        `3. The spell JSON is changing between attempts (should not happen)\n\n` +
+        `Solutions:\n` +
+        `- Wait 10-15 minutes for the Prover's cache to clear and pending transactions to confirm\n` +
+        `- Fund your wallet with more testnet Bitcoin to get fresh UTXOs\n` +
+        `- Check mempool.space/testnet4 for pending transactions\n` +
+        `- Try again later after transactions have confirmed`
+      );
+    } else {
+      throw new Error(
+        `Failed to prove spell after ${attempts} attempts. All UTXOs appear to be in use. ` +
+        `Please wait for pending transactions to confirm or fund your wallet with more testnet Bitcoin.`
+      );
+    }
   }
 
   // 6. Extract transactions from Prover response
-  // Prover returns [commit_tx, spell_tx] as an array of hex strings
+  // Prover returns [commit_tx, spell_tx] as an array
+  // Each transaction can be a hex string or an object with bitcoin/cardano field
   console.log('Prover response type:', typeof proverResponse, Array.isArray(proverResponse));
   console.log('Prover response:', JSON.stringify(proverResponse).substring(0, 500));
   
   let transactions: string[];
   if (Array.isArray(proverResponse)) {
-    transactions = proverResponse;
+    // Handle array format - could be ["hex1", "hex2"] or [{"bitcoin": "hex1"}, {"bitcoin": "hex2"}]
+    transactions = proverResponse.map((tx, index) => {
+      if (typeof tx === 'string') {
+        // Already a hex string
+        return tx;
+      } else if (tx && typeof tx === 'object' && 'bitcoin' in tx) {
+        // Object with bitcoin field: { bitcoin: "hex..." }
+        const txObj = tx as { bitcoin: string };
+        return txObj.bitcoin;
+      } else if (tx && typeof tx === 'object' && 'cardano' in tx) {
+        // Object with cardano field (for Cardano chain)
+        const txObj = tx as { cardano: string };
+        return txObj.cardano;
+      } else {
+        console.error(`Transaction ${index + 1} has unexpected format:`, tx);
+        throw new Error(`Transaction ${index + 1} is invalid: expected string or object with bitcoin/cardano field, got ${typeof tx}`);
+      }
+    });
   } else if (proverResponse && typeof proverResponse === 'object') {
     // Handle object format { commit_tx, spell_tx }
-    const responseObj = proverResponse as { commit_tx?: string; spell_tx?: string; [key: string]: unknown };
-    transactions = [
-      responseObj.commit_tx || '',
-      responseObj.spell_tx || ''
-    ];
+    const responseObj = proverResponse as { commit_tx?: string | { bitcoin?: string }; spell_tx?: string | { bitcoin?: string }; [key: string]: unknown };
+    
+    // Extract hex from commit_tx (could be string or object)
+    const commitTx = responseObj.commit_tx;
+    const commitTxHex = typeof commitTx === 'string' 
+      ? commitTx 
+      : (commitTx && typeof commitTx === 'object' && 'bitcoin' in commitTx)
+        ? (commitTx as { bitcoin: string }).bitcoin
+        : '';
+    
+    // Extract hex from spell_tx (could be string or object)
+    const spellTx = responseObj.spell_tx;
+    const spellTxHex = typeof spellTx === 'string'
+      ? spellTx
+      : (spellTx && typeof spellTx === 'object' && 'bitcoin' in spellTx)
+        ? (spellTx as { bitcoin: string }).bitcoin
+        : '';
+    
+    transactions = [commitTxHex, spellTxHex];
   } else {
     console.error('Unexpected Prover response format:', proverResponse);
     throw new Error('Invalid Prover response format - expected array or object with commit_tx and spell_tx');
@@ -316,19 +512,41 @@ export async function createSubscription(params: {
 
   // 7. Sign transactions
   // Note: Prover returns unsigned hex transactions that need signing
-  // Sats Connect requires PSBT format, but we'll try signing hex directly first
+  // We need to fetch previous transactions for PSBT creation
   const signedTxs: string[] = [];
+  
+  // For the commit transaction (first one), we need the funding UTXO's previous transaction
+  // For the spell transaction (second one), we need the commit transaction's outputs
+  let commitTxHex: string | undefined;
+  
   for (let i = 0; i < transactions.length; i++) {
     const txHex = transactions[i];
     
     try {
-      console.log(`Signing transaction ${i + 1}...`);
+      console.log(`Signing transaction ${i + 1} (${i === 0 ? 'commit' : 'spell'})...`);
+      
+      // Prepare previous transactions for PSBT
+      const previousTxs: Array<{ txid: string; hex: string }> = [];
+      
+      if (i === 0) {
+        // Commit transaction: needs the funding UTXO's previous transaction
+        const prevTxHex = await getPreviousTransaction(fundingUtxo.txid, NETWORK);
+        previousTxs.push({ txid: fundingUtxo.txid, hex: prevTxHex });
+      } else if (i === 1 && commitTxHex) {
+        // Spell transaction: needs the commit transaction (which we just signed)
+        // Extract commit tx ID from the signed commit transaction
+        const commitTx = bitcoin.Transaction.fromHex(commitTxHex);
+        const commitTxId = commitTx.getId();
+        previousTxs.push({ txid: commitTxId, hex: commitTxHex });
+      }
+      
       const signed = await signTransaction(
         {
           psbt: txHex, // Hex encoded transaction
           network: NETWORK,
         },
-        wallet
+        wallet,
+        previousTxs.length > 0 ? previousTxs : undefined
       );
       
       // Validate signed transaction
@@ -337,6 +555,12 @@ export async function createSubscription(params: {
       }
       
       signedTxs.push(signed);
+      
+      // Store commit tx for spell tx signing
+      if (i === 0) {
+        commitTxHex = signed;
+      }
+      
       console.log(`Transaction ${i + 1} signed successfully`);
     } catch (error: unknown) {
       // If signing fails, provide helpful error
@@ -344,9 +568,7 @@ export async function createSubscription(params: {
       console.error(`Failed to sign transaction ${i + 1}:`, errorMessage);
       throw new Error(
         `Failed to sign transaction ${i + 1}: ${errorMessage}. ` +
-        `Transactions from Prover need to be signed before broadcasting. ` +
-        `Currently, hex-to-PSBT conversion is not implemented. ` +
-        `You need to add bitcoinjs-lib to convert hex transactions to PSBT format for signing.`
+        `Make sure previous transactions are available and the wallet has the necessary keys.`
       );
     }
   }
