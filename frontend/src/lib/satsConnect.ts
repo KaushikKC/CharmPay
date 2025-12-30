@@ -153,20 +153,26 @@ export async function signTransaction(
     }
     
     // Add outputs
-    for (const output of tx.outs) {
-      // Decode output script to get address
-      let address: string;
-      try {
-        address = bitcoin.address.fromOutputScript(output.script, btcNetwork);
-      } catch {
-        // If we can't decode, use empty string (PSBT will still work)
-        address = '';
-      }
+    for (let i = 0; i < tx.outs.length; i++) {
+      const output = tx.outs[i];
       
-      psbt.addOutput({
-        address,
-        value: output.value,
-      });
+      // Try to decode the output script to an address
+      // If it fails (e.g., OP_RETURN, Charms state, non-standard script), use raw script
+      try {
+        const address = bitcoin.address.fromOutputScript(output.script, btcNetwork);
+        console.log(`  Output ${i}: ${address} (${output.value} sats)`);
+        psbt.addOutput({
+          address,
+          value: output.value,
+        });
+      } catch (e) {
+        // Non-standard output - use raw script instead of address
+        console.log(`  Output ${i}: Non-standard script (${output.value} sats) - using raw script`);
+        psbt.addOutput({
+          script: output.script,
+          value: output.value,
+        });
+      }
     }
     
     // Convert PSBT to base64 for Sats Connect

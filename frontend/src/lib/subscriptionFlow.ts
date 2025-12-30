@@ -512,65 +512,119 @@ export async function createSubscription(params: {
 
   // 7. Sign transactions
   // Note: Prover returns unsigned hex transactions that need signing
-  // We need to fetch previous transactions for PSBT creation
+  // We need to fetch ALL previous transactions for ALL inputs in both transactions
   const signedTxs: string[] = [];
   
-  // For the commit transaction (first one), we need the funding UTXO's previous transaction
-  // For the spell transaction (second one), we need the commit transaction's outputs
-  let commitTxHex: string | undefined;
+  // Parse both transactions to determine all inputs and their previous transactions
+  console.log('Analyzing transactions to determine required previous transactions...');
+  const commitTx = bitcoin.Transaction.fromHex(transactions[0]);
+  const spellTx = bitcoin.Transaction.fromHex(transactions[1]);
   
-  for (let i = 0; i < transactions.length; i++) {
-    const txHex = transactions[i];
-    
+  // Calculate the commit transaction ID (what it will be after signing)
+  // Note: The txid changes after signing, but the Prover uses the unsigned txid in the spell
+  const unsignedCommitTxId = commitTx.getId();
+  console.log(`Commit transaction ID (unsigned): ${unsignedCommitTxId}`);
+  
+  // Collect all unique previous transaction IDs we need to fetch (excluding commit tx)
+  const allPrevTxIds = new Set<string>();
+  
+  // Commit transaction inputs - these are real previous transactions we need to fetch
+  for (const input of commitTx.ins) {
+    const txid = Buffer.from(input.hash).reverse().toString('hex');
+    allPrevTxIds.add(txid);
+    console.log(`  Commit tx input: ${txid.substring(0, 16)}...`);
+  }
+  
+  // Spell transaction inputs - these might include the commit tx (which doesn't exist yet)
+  for (const input of spellTx.ins) {
+    const txid = Buffer.from(input.hash).reverse().toString('hex');
+    if (txid !== unsignedCommitTxId) {
+      // Only add if it's not the commit transaction
+      allPrevTxIds.add(txid);
+      console.log(`  Spell tx input (non-commit): ${txid.substring(0, 16)}...`);
+    } else {
+      console.log(`  Spell tx input (commit tx - will add after signing): ${txid.substring(0, 16)}...`);
+    }
+  }
+  
+  console.log(`Need to fetch ${allPrevTxIds.size} previous transactions from blockchain`);
+  
+  // Fetch all previous transactions upfront (excluding commit tx which doesn't exist yet)
+  const allPrevTxs: Array<{ txid: string; hex: string }> = [];
+  for (const txid of allPrevTxIds) {
     try {
-      console.log(`Signing transaction ${i + 1} (${i === 0 ? 'commit' : 'spell'})...`);
-      
-      // Prepare previous transactions for PSBT
-      const previousTxs: Array<{ txid: string; hex: string }> = [];
-      
-      if (i === 0) {
-        // Commit transaction: needs the funding UTXO's previous transaction
-        const prevTxHex = await getPreviousTransaction(fundingUtxo.txid, NETWORK);
-        previousTxs.push({ txid: fundingUtxo.txid, hex: prevTxHex });
-      } else if (i === 1 && commitTxHex) {
-        // Spell transaction: needs the commit transaction (which we just signed)
-        // Extract commit tx ID from the signed commit transaction
-        const commitTx = bitcoin.Transaction.fromHex(commitTxHex);
-        const commitTxId = commitTx.getId();
-        previousTxs.push({ txid: commitTxId, hex: commitTxHex });
-      }
-      
-      const signed = await signTransaction(
-        {
-          psbt: txHex, // Hex encoded transaction
-          network: NETWORK,
-        },
-        wallet,
-        previousTxs.length > 0 ? previousTxs : undefined
-      );
-      
-      // Validate signed transaction
-      if (!signed || signed.length === 0) {
-        throw new Error('Signed transaction is empty');
-      }
-      
-      signedTxs.push(signed);
-      
-      // Store commit tx for spell tx signing
-      if (i === 0) {
-        commitTxHex = signed;
-      }
-      
-      console.log(`Transaction ${i + 1} signed successfully`);
-    } catch (error: unknown) {
-      // If signing fails, provide helpful error
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`Failed to sign transaction ${i + 1}:`, errorMessage);
+      const hex = await getPreviousTransaction(txid, NETWORK);
+      allPrevTxs.push({ txid, hex });
+      console.log(`  ✅ Fetched previous transaction: ${txid.substring(0, 16)}...`);
+    } catch (error) {
+      console.error(`  ❌ Failed to fetch previous transaction ${txid}:`, error);
       throw new Error(
-        `Failed to sign transaction ${i + 1}: ${errorMessage}. ` +
-        `Make sure previous transactions are available and the wallet has the necessary keys.`
+        `Cannot fetch required previous transaction ${txid}. ` +
+        `This transaction must exist on the blockchain before signing. ` +
+        `Error: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+  
+  // Sign commit transaction first
+  console.log('Signing commit transaction...');
+  let commitTxHex: string;
+  try {
+    commitTxHex = await signTransaction(
+      {
+        psbt: transactions[0],
+        network: NETWORK,
+      },
+      wallet,
+      allPrevTxs
+    );
+    
+    if (!commitTxHex || commitTxHex.length === 0) {
+      throw new Error('Signed commit transaction is empty');
+    }
+    
+    signedTxs.push(commitTxHex);
+    console.log('✅ Commit transaction signed successfully');
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Failed to sign commit transaction:', errorMessage);
+    throw new Error(
+      `Failed to sign commit transaction: ${errorMessage}. ` +
+      `Make sure the wallet has the necessary keys and previous transactions are available.`
+    );
+  }
+  
+  // Add the signed commit transaction to previous transactions for spell tx signing
+  const commitTxParsed = bitcoin.Transaction.fromHex(commitTxHex);
+  const commitTxId = commitTxParsed.getId();
+  allPrevTxs.push({ txid: commitTxId, hex: commitTxHex });
+  console.log(`Added signed commit transaction to previous transactions: ${commitTxId.substring(0, 16)}...`);
+  
+  // Sign spell transaction
+  console.log('Signing spell transaction...');
+  try {
+    const spellTxHex = await signTransaction(
+      {
+        psbt: transactions[1],
+        network: NETWORK,
+      },
+      wallet,
+      allPrevTxs
+    );
+    
+    if (!spellTxHex || spellTxHex.length === 0) {
+      throw new Error('Signed spell transaction is empty');
+    }
+    
+    signedTxs.push(spellTxHex);
+    console.log('✅ Spell transaction signed successfully');
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Failed to sign spell transaction:', errorMessage);
+    throw new Error(
+      `Failed to sign spell transaction: ${errorMessage}. ` +
+      `Make sure the wallet has the necessary keys and previous transactions are available.`
+    );
   }
 
   // 8. Broadcast transactions as a package (both must be broadcast together)
